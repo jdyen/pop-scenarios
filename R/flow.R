@@ -153,10 +153,54 @@ rm_extremes <- function(x, range) {
   x
 }
 
+# function to return hypoxia risk as a neat tibble
+fetch_hypoxia_risk <- function() {
+  
+  # set carrying capacity
+  .sys_list <- c(
+    "broken_creek_r4",
+    "broken_river_r3",
+    "campaspe_river_r4",
+    "glenelg_river_r1",
+    "glenelg_river_r2",
+    "glenelg_river_r3",
+    "goulburn_river_r4",
+    "loddon_river_r2",
+    "loddon_river_r4",
+    "macalister_river_r1",
+    "mackenzie_river_r3",
+    "moorabool_river_r3",
+    "ovens_river_r5",
+    "thomson_river_r3"
+  )
+  
+  # collate and return
+  tibble(waterbody = .sys_list) |>
+    mutate(
+      hypoxia_threshold_discharge = NA,
+      hypoxia_threshold_discharge = ifelse(
+        waterbody == "broken_creek_r4", 
+        350,
+        hypoxia_threshold_discharge
+      ),
+      hypoxia_threshold_temp = NA,
+      hypoxia_threshold_temp = ifelse(
+        waterbody == "broken_creek_r4", 
+        25,
+        hypoxia_threshold_temp
+      )
+    )
+  
+}
+
 # function calculate flow metrics from daily discharge and temperature data
 calculate_flow_metrics <- function(
-    data, carrying_capacity, hypoxia_risk = NULL
+  data,
+  categories = c("species", "waterbody", "future", "scenario")
 ) {
+  
+  # TODO: update hypoxia and carrying capacity calculations (values included in data now,
+  #   but this gets overwritten below)
   
   # which year range do we want?  
   year <- min(year(data$date_formatted)):max(year(data$date_formatted))
@@ -180,91 +224,93 @@ calculate_flow_metrics <- function(
     )
   
   # calculate metrics
-  out <- data %>% reframe(
-    water_year = calculate(
-      flow,
-      date,
-      resolution = survey(season = 9:11, subset = year), 
-      na.rm = TRUE
-    )$date,
-    proportional_spring_flow = calculate(
-      flow,
-      date,
-      resolution = survey(season = 9:11, subset = year), 
-      na.rm = TRUE
-    )$metric,
-    relative_max_antecedent = calculate(
-      flow, 
-      date,
-      resolution = survey(season = 7:18, lag = 1, subset = year + 1),
-      fun = max,
-      na.rm = TRUE
-    )$metric,
-    proportional_antecedent_flow = calculate(
-      flow,
-      date,
-      resolution = survey(season = c(7:18), subset = year, lag = 1),
-      na.rm = TRUE
-    )$metric,
-    proportional_summer_flow = calculate(
-      flow,
-      date,
-      na.rm = TRUE,
-      resolution = survey(season = c(12:15), subset = year)
-    )$metric,
-    proportional_winter_flow = calculate(
-      flow, 
-      date, 
-      na.rm = TRUE, 
-      resolution = survey(season = 6:8, subset = year)
-    )$metric,
-    spawning_temperature = calculate(
-      temp, date, resolution = survey(season = 10:12, subset = year)
-    )$metric,
-    spawning_flow_variability = calculate(
-      flow,
-      date,
-      resolution = survey(season = 10:12, subset = year),
-      fun = rolling_range,
-      lag = 3,
-      na.rm = TRUE
-    )$metric,
-    minimum_daily_flow = calculate(
-      flow, 
-      date, 
-      na.rm = TRUE, 
-      resolution = survey(season = 7:18, subset = year),
-      fun = min
-    )$metric,
-    nday_gt16 = calculate(
-      temp,
-      date,
-      resolution = survey(season = 9:12, subset = year),
-      fun = days_above,
-      threshold = 16
-    )$metric,
-    nday_lt5 = calculate(
-      temp,
-      date,
-      resolution = survey(season = 7:18, subset = year),
-      fun = days_below,
-      threshold = 5
-    )$metric,
-    nday_gt20 = calculate(
-      temp,
-      date,
-      resolution = survey(season = 10:15, subset = year),
-      fun = days_above,
-      threshold = 20
-    )$metric,
-    nday_lt10 = calculate(
-      temp,
-      date,
-      resolution = survey(season = 7:18, subset = year),
-      fun = days_below,
-      threshold = 10
-    )$metric
-  )
+  out <- data %>% 
+    group_by(all_of(categories)) |>
+    reframe(
+      water_year = calculate(
+        flow,
+        date,
+        resolution = survey(season = 9:11, subset = year), 
+        na.rm = TRUE
+      )$date,
+      proportional_spring_flow = calculate(
+        flow,
+        date,
+        resolution = survey(season = 9:11, subset = year), 
+        na.rm = TRUE
+      )$metric,
+      relative_max_antecedent = calculate(
+        flow, 
+        date,
+        resolution = survey(season = 7:18, lag = 1, subset = year + 1),
+        fun = max,
+        na.rm = TRUE
+      )$metric,
+      proportional_antecedent_flow = calculate(
+        flow,
+        date,
+        resolution = survey(season = c(7:18), subset = year, lag = 1),
+        na.rm = TRUE
+      )$metric,
+      proportional_summer_flow = calculate(
+        flow,
+        date,
+        na.rm = TRUE,
+        resolution = survey(season = c(12:15), subset = year)
+      )$metric,
+      proportional_winter_flow = calculate(
+        flow, 
+        date, 
+        na.rm = TRUE, 
+        resolution = survey(season = 6:8, subset = year)
+      )$metric,
+      spawning_temperature = calculate(
+        temp, date, resolution = survey(season = 10:12, subset = year)
+      )$metric,
+      spawning_flow_variability = calculate(
+        flow,
+        date,
+        resolution = survey(season = 10:12, subset = year),
+        fun = rolling_range,
+        lag = 3,
+        na.rm = TRUE
+      )$metric,
+      minimum_daily_flow = calculate(
+        flow, 
+        date, 
+        na.rm = TRUE, 
+        resolution = survey(season = 7:18, subset = year),
+        fun = min
+      )$metric,
+      nday_gt16 = calculate(
+        temp,
+        date,
+        resolution = survey(season = 9:12, subset = year),
+        fun = days_above,
+        threshold = 16
+      )$metric,
+      nday_lt5 = calculate(
+        temp,
+        date,
+        resolution = survey(season = 7:18, subset = year),
+        fun = days_below,
+        threshold = 5
+      )$metric,
+      nday_gt20 = calculate(
+        temp,
+        date,
+        resolution = survey(season = 10:15, subset = year),
+        fun = days_above,
+        threshold = 20
+      )$metric,
+      nday_lt10 = calculate(
+        temp,
+        date,
+        resolution = survey(season = 7:18, subset = year),
+        fun = days_below,
+        threshold = 10
+      )$metric
+    )
   
   # rescale based on reference values
   idx <- grep("proportional", colnames(out))
@@ -500,6 +546,16 @@ apply_flow_event <- function(x, y, scn, template_years, w, cutoff) {
         )
       }
       
+      # and append earlier years of data
+      out[[i]][[j]] <- rbind(
+        data.frame(
+          date_formatted = y,
+          stream_discharge_mld = x,
+          water_temperature_c = w
+        ),
+        out[[i]][[j]]
+      )
+      
     }
     
   }
@@ -661,7 +717,12 @@ specify_flow_future <- function(x) {
   # add some identifiers to the output
   names(out) <- names(system_details)
   
+  # flatten to a big tibble
+  out <- lapply(out, \(x) lapply(x, add_col_bind))
+  out <- lapply(out, add_col_bind, name = "future")
+  out <- add_col_bind(out, name = "waterbody")
+  
   # return
-  out
+  out |> as_tibble()
   
 }

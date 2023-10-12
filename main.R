@@ -12,7 +12,7 @@
 # Author: Jian Yen (jdl.yen [at] gmail.com)
 # 
 # Date created: 5 July 2023
-# Date modified: 11 October 2023
+# Date modified: 12 October 2023
 
 # TODO: update BF template with recruitment flow effects
 #       update all templates with info from trends analysis (not many effects on adults, so be careful with this)
@@ -30,86 +30,9 @@ library(ggplot2)
 library(ragg)
 
 # and some load helpers
+source("R/utils.R")
 source("R/fish.R")
 source("R/flow.R")
-
-# specify species and locations
-sciname_list <- c(
-  "Gadopsis marmoratus",
-  "Maccullochella peelii",
-  "Melanotaenia fluviatilis"
-)
-waterbody_list <- list(
-  gadopsis_marmoratus = c(
-    "Glenelg River",
-    "Loddon River",
-    "Mackenzie River",
-    "Macalister River",
-    "Moorabool River",
-    "Thomson River"
-  ),
-  maccullochella_peelii = c(
-    "Broken Creek",
-    "Broken River",
-    "Campaspe River",
-    "Goulburn River", 
-    "Loddon River",
-    "Ovens River"
-  ),
-  melanotaenia_fluviatilis = c(
-    "Broken Creek",
-    "Broken River",
-    "Campaspe River",
-    "Goulburn River",
-    "Loddon River",
-    "Ovens River"
-  )
-)
-reach_list <- c(
-  "Broken Creek_r4",
-  "Broken River_r3",  # use 404224, very little e-water delivered here
-  "Campaspe River_r4",
-  "Glenelg River_r1", # use R1b gauge flows
-  "Glenelg River_r2",
-  "Glenelg River_r3",
-  "Goulburn River_r4",
-  "Loddon River_r2",  # no compliance assessed here, so no e-water recorded
-  "Loddon River_r4",
-  "Macalister River_r1",
-  "Mackenzie River_r3",  # @ McKenzie Ck, too far down but no gauge in R1
-  "Moorabool River_r3",
-  "Ovens River_r5",  # very little e-water here
-  "Thomson River_r3"
-)
-
-carrying_capacity <- list(
-  gadopsis_marmoratus = c(
-    "glenelg_river_r1" = 50000,
-    "glenelg_river_r2" = 100000,
-    "glenelg_river_r3" = 200000,
-    "loddon_river_r2" = 100000,
-    "macalister_river_r1" = 100000,
-    "mackenzie_river_r3" = 50000,
-    "moorabool_river_r3" = 100000,
-    "thomson_river_r3" = 200000
-  ),
-  maccullochella_peelii = c(
-    "broken_creek_r4" = 50000,
-    "broken_river_r3" = 200000,
-    "campaspe_river_r4" = 50000,
-    "goulburn_river_r4" = 100000,
-    "loddon_river_r4" = 200000,
-    "ovens_river_r5" = 100000
-  ),
-  melanotaenia_fluviatilis = c(
-    "broken_creek_r4" = 1000,
-    "broken_river_r3" = 5000,
-    "campaspe_river_r4" = 5000,
-    "goulburn_river_r4" = 10000,
-    "loddon_river_r4" = 3000,
-    "ovens_river_r5" = 10000
-  )
-)
 
 # load data
 cpue <- fetch_fish(recompile = FALSE)
@@ -124,42 +47,63 @@ flow <- fetch_flow(start = 2009, end = 2023, recompile = FALSE)
 #    create specific scenarios)
 flow_futures <- specify_flow_future(flow)
 
-# TODO: do chopping and changing here...
-# TODO: see if metrics can be calculated for the futures only (which would
-#   make it easier to append these to the main flow scenarios)
+# and add some extra information on hypoxia risk and K by species (expands
+#   over species)
+flow_futures <- flow_futures |>
+  left_join(
+    fetch_hypoxia_risk(),
+    by = "waterbody"
+  ) |>
+  left_join(
+    fetch_carrying_capacity(), 
+    by = "waterbody",
+    relationship = "many-to-many"
+  )
 
 # specify climate change scenarios
 # flow_gcm <- apply_gcm(flow)  # add a lookup for catchments, need to add a few still
 
-# calculate flow metrics
-calculate_metrics <- function(x, xname, k, species) {
+## TODO: redo metrics calculation fn to handle tibble rather htan lists
+flow_futures_tmp |>
+  group_by(waterbody, future, scenario) |>
+  calculate(value = stream_discharge_mld, date = date_formatted, resolution = survey(9:11))
 
-  # specify hypoxia risk by system
-  hypoxia_risk <- NULL
-  if (xname == "broken_creek_r4")
-    hypoxia_risk <- c(350, 25)
-
-  # calculate and return k-scaled flow metrics  
-  calculate_flow_metrics(
-    x, 
-    carrying_capacity = k,
-    hypoxia_risk = hypoxia_risk
-  )
-  
-}
 metrics <- vector("list", length = length(carrying_capacity))
 names(metrics) <- names(carrying_capacity)
 for (i in seq_along(carrying_capacity)) {
-  flow_sub <- flow[names(carrying_capacity[[i]])]
-  metrics[[i]] <- mapply(
+  flow_sub <- flow_futures[names(carrying_capacity[[i]])]
+  metrics[[i]] <- vector("list", length = length(flow_sub))
+  names(metrics[[i]]) <- names(flow_sub)
+  for (j in seq_along(flow_sub)) {
+    metrics[[i]][[j]] <- vector("list", length = length(flow_sub[[j]]))
+    names(metrics[[i]][[j]]) <- names(flow_sub[[j]])
+    for (k in seq_along(flow_sub[[j]])) {
+      metrics[[i]][[j]][[k]] <- mapply(
+        calculate_metrics, 
+        flow_sub,
+        names(flow_sub),
+        carrying_capacity[[names(carrying_capacity)[i]]],
+        MoreArgs = list(species = names(carrying_capacity)[i]),
+        SIMPLIFY = FALSE
+      )
+    }
+  }
+}
+
+metrics_futures <- vector("list", length = length(carrying_capacity))
+names(metrics_futures) <- names(carrying_capacity)
+for (i in seq_along(carrying_capacity)) {
+  flow_sub <- flow_futures[names(carrying_capacity[[i]])]
+  metrics_futures[[i]] <- mapply(
     calculate_metrics, 
-    flow_sub,
+    lapply(flow_sub, \(x) x$ave$none),
     names(flow_sub),
     carrying_capacity[[names(carrying_capacity)[i]]],
     MoreArgs = list(species = names(carrying_capacity)[i]),
     SIMPLIFY = FALSE
   )
 }
+
 
 ## SEE IF CAN CALCULATE FOR FUTURES (NEED TO WORK OUT NESTED LISTS)
 

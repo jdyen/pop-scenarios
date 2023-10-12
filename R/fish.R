@@ -1,3 +1,94 @@
+# specify species and locations
+sciname_list <- c(
+  "Gadopsis marmoratus",
+  "Maccullochella peelii",
+  "Melanotaenia fluviatilis"
+)
+waterbody_list <- list(
+  gadopsis_marmoratus = c(
+    "Glenelg River",
+    "Loddon River",
+    "Mackenzie River",
+    "Macalister River",
+    "Moorabool River",
+    "Thomson River"
+  ),
+  maccullochella_peelii = c(
+    "Broken Creek",
+    "Broken River",
+    "Campaspe River",
+    "Goulburn River", 
+    "Loddon River",
+    "Ovens River"
+  ),
+  melanotaenia_fluviatilis = c(
+    "Broken Creek",
+    "Broken River",
+    "Campaspe River",
+    "Goulburn River",
+    "Loddon River",
+    "Ovens River"
+  )
+)
+reach_list <- c(
+  "Broken Creek_r4",
+  "Broken River_r3",  # use 404224, very little e-water delivered here
+  "Campaspe River_r4",
+  "Glenelg River_r1", # use R1b gauge flows
+  "Glenelg River_r2",
+  "Glenelg River_r3",
+  "Goulburn River_r4",
+  "Loddon River_r2",  # no compliance assessed here, so no e-water recorded
+  "Loddon River_r4",
+  "Macalister River_r1",
+  "Mackenzie River_r3",  # @ McKenzie Ck, too far down but no gauge in R1
+  "Moorabool River_r3",
+  "Ovens River_r5",  # very little e-water here
+  "Thomson River_r3"
+)
+
+# function to return carrying capacity as a neat tibble
+fetch_carrying_capacity <- function() {
+
+  # set carrying capacity
+  .carrying_capacity <- list(
+    gadopsis_marmoratus = c(
+      "glenelg_river_r1" = 50000,
+      "glenelg_river_r2" = 100000,
+      "glenelg_river_r3" = 200000,
+      "loddon_river_r2" = 100000,
+      "macalister_river_r1" = 100000,
+      "mackenzie_river_r3" = 50000,
+      "moorabool_river_r3" = 100000,
+      "thomson_river_r3" = 200000
+    ),
+    maccullochella_peelii = c(
+      "broken_creek_r4" = 50000,
+      "broken_river_r3" = 200000,
+      "campaspe_river_r4" = 50000,
+      "goulburn_river_r4" = 100000,
+      "loddon_river_r4" = 200000,
+      "ovens_river_r5" = 100000
+    ),
+    melanotaenia_fluviatilis = c(
+      "broken_creek_r4" = 1000,
+      "broken_river_r3" = 5000,
+      "campaspe_river_r4" = 5000,
+      "goulburn_river_r4" = 10000,
+      "loddon_river_r4" = 3000,
+      "ovens_river_r5" = 10000
+    )
+  )
+  
+  # collate and return
+  tibble(
+    species = rep(names(.carrying_capacity), times = sapply(.carrying_capacity, length)),
+    waterbody = unlist(lapply(.carrying_capacity, names)),
+    carrying_capacity = unlist(.carrying_capacity)
+  )
+  
+}
+
 # internal function to download fish data from AAEDB
 fetch_fish <- function(recompile = FALSE) {
   
