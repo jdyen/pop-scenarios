@@ -63,49 +63,37 @@ flow_futures <- flow_futures |>
 # specify climate change scenarios
 # flow_gcm <- apply_gcm(flow)  # add a lookup for catchments, need to add a few still
 
-## TODO: redo metrics calculation fn to handle tibble rather htan lists
-flow_futures_tmp |>
-  group_by(waterbody, future, scenario) |>
-  calculate(value = stream_discharge_mld, date = date_formatted, resolution = survey(9:11))
+# calculate flow metrics
+metrics <- calculate_metrics(flow_futures, recompile = FALSE)
 
-metrics <- vector("list", length = length(carrying_capacity))
-names(metrics) <- names(carrying_capacity)
-for (i in seq_along(carrying_capacity)) {
-  flow_sub <- flow_futures[names(carrying_capacity[[i]])]
-  metrics[[i]] <- vector("list", length = length(flow_sub))
-  names(metrics[[i]]) <- names(flow_sub)
-  for (j in seq_along(flow_sub)) {
-    metrics[[i]][[j]] <- vector("list", length = length(flow_sub[[j]]))
-    names(metrics[[i]][[j]]) <- names(flow_sub[[j]])
-    for (k in seq_along(flow_sub[[j]])) {
-      metrics[[i]][[j]][[k]] <- mapply(
-        calculate_metrics, 
-        flow_sub,
-        names(flow_sub),
-        carrying_capacity[[names(carrying_capacity)[i]]],
-        MoreArgs = list(species = names(carrying_capacity)[i]),
-        SIMPLIFY = FALSE
-      )
-    }
-  }
-}
+# TODO: update clacultea_metrics
+# Previously
+# across(a:b, mean, na.rm = TRUE)
+# Now
+# across(a:b, \(x) mean(x, na.rm = TRUE))
 
-metrics_futures <- vector("list", length = length(carrying_capacity))
-names(metrics_futures) <- names(carrying_capacity)
-for (i in seq_along(carrying_capacity)) {
-  flow_sub <- flow_futures[names(carrying_capacity[[i]])]
-  metrics_futures[[i]] <- mapply(
-    calculate_metrics, 
-    lapply(flow_sub, \(x) x$ave$none),
-    names(flow_sub),
-    carrying_capacity[[names(carrying_capacity)[i]]],
-    MoreArgs = list(species = names(carrying_capacity)[i]),
-    SIMPLIFY = FALSE
-  )
-}
+# TODO: add a 2025 water year onto this, chopping and changing all combos with 
+#   correct antecedent conditions (i.e. use 2024 annual values for antecedent flows)
+
+##  TODO: pull out just 2024/25 for each scenario, set 2010-2023 as a single scenario
+#   per system (observed), which can be contrasted with ocunterfactuals below, and then
+#   then appendx teh 24/25 scenarios on within the pop model run (all initialised the same)
+scenario_options <- flow_futures |>
+  distinct(species, waterbody, future, scenario) |>
+  mutate(future_next = future, scenario_next = scenario) |>
+  expand(species, waterbody, future, future_next, scenario, scenario_next)
+
+# for each one, pull out the correct scenario, grab the 2024 metrics for 
+#   future and scenario, then grab the 2024 metrics for future_next and
+#   scenario_next, update water_year and replace antecedent with 2024 annual 
+#   values
+metrics_extra <- metrics |>
+  filter(water_year == max(water_year)) |>
+  mutate(water_year = max(water_year) + 1)
 
 
-## SEE IF CAN CALCULATE FOR FUTURES (NEED TO WORK OUT NESTED LISTS)
+# strip down to relevant metrics only
+
 
 # load data wihtout e-flows (check reaches and filter to those?)
 # Ovens, Upper Loddon, and Broken R Reach 3 have no e-water (very small amounts)

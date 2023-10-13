@@ -194,182 +194,230 @@ fetch_hypoxia_risk <- function() {
 }
 
 # function calculate flow metrics from daily discharge and temperature data
-calculate_flow_metrics <- function(
-  data,
-  categories = c("species", "waterbody", "future", "scenario")
-) {
+calculate_metrics <- function(data, recompile = FALSE, ...) {
   
-  # TODO: update hypoxia and carrying capacity calculations (values included in data now,
-  #   but this gets overwritten below)
+  # check if metrics exist
+  metrics_exist <- any(grepl("metrics.qs", dir("data/")))
   
-  # which year range do we want?  
-  year <- min(year(data$date_formatted)):max(year(data$date_formatted))
-  
-  # and grab some reference values for rescaling
-  reference_discharge <- median(data$stream_discharge_mld, na.rm = TRUE)
-  reference_temperature <- median(data$water_temperature_c, na.rm = TRUE)
-  reference_max <- max(data$stream_discharge_mld, na.rm = TRUE)
-  
-  # pull out relevant variables
-  data <- data %>% 
-    select(
-      stream_discharge_mld,
-      date_formatted,
-      water_temperature_c
-    ) %>%
-    rename(
-      flow = stream_discharge_mld,
-      date = date_formatted,
-      temp = water_temperature_c
-    )
-  
-  # calculate metrics
-  out <- data %>% 
-    group_by(all_of(categories)) |>
-    reframe(
-      water_year = calculate(
-        flow,
-        date,
-        resolution = survey(season = 9:11, subset = year), 
-        na.rm = TRUE
-      )$date,
-      proportional_spring_flow = calculate(
-        flow,
-        date,
-        resolution = survey(season = 9:11, subset = year), 
-        na.rm = TRUE
-      )$metric,
-      relative_max_antecedent = calculate(
-        flow, 
-        date,
-        resolution = survey(season = 7:18, lag = 1, subset = year + 1),
-        fun = max,
-        na.rm = TRUE
-      )$metric,
-      proportional_antecedent_flow = calculate(
-        flow,
-        date,
-        resolution = survey(season = c(7:18), subset = year, lag = 1),
-        na.rm = TRUE
-      )$metric,
-      proportional_summer_flow = calculate(
-        flow,
-        date,
-        na.rm = TRUE,
-        resolution = survey(season = c(12:15), subset = year)
-      )$metric,
-      proportional_winter_flow = calculate(
-        flow, 
-        date, 
-        na.rm = TRUE, 
-        resolution = survey(season = 6:8, subset = year)
-      )$metric,
-      spawning_temperature = calculate(
-        temp, date, resolution = survey(season = 10:12, subset = year)
-      )$metric,
-      spawning_flow_variability = calculate(
-        flow,
-        date,
-        resolution = survey(season = 10:12, subset = year),
-        fun = rolling_range,
-        lag = 3,
-        na.rm = TRUE
-      )$metric,
-      minimum_daily_flow = calculate(
-        flow, 
-        date, 
-        na.rm = TRUE, 
-        resolution = survey(season = 7:18, subset = year),
-        fun = min
-      )$metric,
-      nday_gt16 = calculate(
-        temp,
-        date,
-        resolution = survey(season = 9:12, subset = year),
-        fun = days_above,
-        threshold = 16
-      )$metric,
-      nday_lt5 = calculate(
-        temp,
-        date,
-        resolution = survey(season = 7:18, subset = year),
-        fun = days_below,
-        threshold = 5
-      )$metric,
-      nday_gt20 = calculate(
-        temp,
-        date,
-        resolution = survey(season = 10:15, subset = year),
-        fun = days_above,
-        threshold = 20
-      )$metric,
-      nday_lt10 = calculate(
-        temp,
-        date,
-        resolution = survey(season = 7:18, subset = year),
-        fun = days_below,
-        threshold = 10
-      )$metric
-    )
-  
-  # rescale based on reference values
-  idx <- grep("proportional", colnames(out))
-  out[, idx] <- out[, idx] / reference_discharge
-  out[, "spawning_temperature"] <- out[, "spawning_temperature"] / reference_temperature
-  out[, "relative_max_antecedent"] <- out[, "relative_max_antecedent"] / reference_max
-  
-  # rename max antecedent
-  colnames(out) <- gsub("relative", "proportional", colnames(out))
-  
-  # calculate dynamic carrying capacity
-  annual_median_discharge <- calculate(
-    data$flow, 
-    data$date,
-    standardise = by_median(subset = year, na.rm = TRUE),
-    na.rm = TRUE,
-    resolution = survey(season = 7:18, subset = year)
-  )$metric
-  lagged_median <- c(
-    annual_median_discharge[1:3],
-    rolling_median(annual_median_discharge, lag = 3, na.rm = TRUE)
-  )
-  lagged_median <- lagged_median[-c(1, (length(lagged_median) - 1L):length(lagged_median))]
-  kdyn <- sapply(
-    lagged_median,
-    function(x) x * carrying_capacity
-  )
-  kdyn[kdyn > 3 * carrying_capacity] <- 3 * carrying_capacity
-  out <- cbind(out, "kdyn" = kdyn)
-  
-  # and calculate blackwater risk if triggers known
-  if (!is.null(hypoxia_risk)) {
-    blackwater_risk_flow <- calculate(
-      data$flow,
-      data$date,
-      resolution = survey(season = 12:15, subset = year), 
-      fun = blackwater_fn,
-      trigger = hypoxia_risk[1],
-      na.rm = TRUE
-    )$metric
-    blackwater_risk_temp <- calculate(
-      data$temp,
-      data$date,
-      resolution = survey(season = 12:15, subset = year), 
-      fun = blackwater_fn,
-      trigger = hypoxia_risk[2],
-      type = days_above,
-      na.rm = TRUE
-    )$metric
-    blackwater_risk <- ifelse(
-      blackwater_risk_flow & blackwater_risk_temp,
-      1,
-      0
-    )
-    out <- cbind(out, "blackwater_risk" = blackwater_risk)
+  # load metrics from file if they exist and !recompile
+  if (!recompile & metrics_exist) {
+    
+    # load from file
+    out <- qread("data/metrics.qs")
+    
+  } else {
+    
+    # which year range do we want?  
+    year <- min(year(data$date_formatted)):max(year(data$date_formatted))
+    
+    # and grab some reference values for rescaling
+    reference_discharge <- median(data$stream_discharge_mld, na.rm = TRUE)
+    reference_temperature <- median(data$water_temperature_c, na.rm = TRUE)
+    reference_max <- max(data$stream_discharge_mld, na.rm = TRUE)
+    
+    # pull out carrying capacity and hypoxia levels by group
+    carrying_capacity <- data %>% 
+      group_by(species, waterbody) |>
+      summarise(carrying_capacity = unique(carrying_capacity))
+    hypoxia_thresholds <- data |>
+      group_by(waterbody) |>
+      summarise(
+        hypoxia_threshold_discharge = unique(hypoxia_threshold_discharge),
+        hypoxia_threshold_temp = unique(hypoxia_threshold_temp)
+      )
+    
+    # pull out relevant variables
+    data <- data %>% 
+      select(
+        species,
+        waterbody,
+        future,
+        scenario,
+        stream_discharge_mld,
+        date_formatted,
+        water_temperature_c
+      ) %>%
+      rename(
+        flow = stream_discharge_mld,
+        date = date_formatted,
+        temp = water_temperature_c
+      )
+    
+    # calculate metrics
+    out <- data %>% 
+      left_join(hypoxia_thresholds, by = "waterbody") |>
+      group_by(species, waterbody, future, scenario) |>
+      reframe(
+        water_year = calculate(
+          flow,
+          date,
+          resolution = survey(season = 9:11, subset = year), 
+          na.rm = TRUE
+        )$date,
+        proportional_spring_flow = calculate(
+          flow,
+          date,
+          resolution = survey(season = 9:11, subset = year), 
+          na.rm = TRUE
+        )$metric,
+        relative_max_annual = calculate(
+          flow, 
+          date,
+          resolution = survey(season = 7:18, subset = year),
+          fun = max,
+          na.rm = TRUE
+        )$metric,
+        proportional_annual_flow = calculate(
+          flow,
+          date,
+          resolution = survey(season = c(7:18), subset = year),
+          na.rm = TRUE
+        )$metric,
+        relative_max_antecedent = calculate(
+          flow, 
+          date,
+          resolution = survey(season = 7:18, lag = 1, subset = year + 1),
+          fun = max,
+          na.rm = TRUE
+        )$metric,
+        proportional_antecedent_flow = calculate(
+          flow,
+          date,
+          resolution = survey(season = c(7:18), subset = year + 1, lag = 1),
+          na.rm = TRUE
+        )$metric,
+        proportional_summer_flow = calculate(
+          flow,
+          date,
+          na.rm = TRUE,
+          resolution = survey(season = c(12:15), subset = year)
+        )$metric,
+        proportional_winter_flow = calculate(
+          flow, 
+          date, 
+          na.rm = TRUE, 
+          resolution = survey(season = 6:8, subset = year)
+        )$metric,
+        spawning_temperature = calculate(
+          temp, date, resolution = survey(season = 10:12, subset = year)
+        )$metric,
+        spawning_flow_variability = calculate(
+          flow,
+          date,
+          resolution = survey(season = 10:12, subset = year),
+          fun = rolling_range,
+          lag = 3,
+          na.rm = TRUE
+        )$metric,
+        minimum_daily_flow = calculate(
+          flow, 
+          date, 
+          na.rm = TRUE, 
+          resolution = survey(season = 7:18, subset = year),
+          fun = min
+        )$metric,
+        nday_gt16 = calculate(
+          temp,
+          date,
+          resolution = survey(season = 9:12, subset = year),
+          fun = days_above,
+          threshold = 16
+        )$metric,
+        nday_lt5 = calculate(
+          temp,
+          date,
+          resolution = survey(season = 7:18, subset = year),
+          fun = days_below,
+          threshold = 5
+        )$metric,
+        nday_gt20 = calculate(
+          temp,
+          date,
+          resolution = survey(season = 10:15, subset = year),
+          fun = days_above,
+          threshold = 20
+        )$metric,
+        nday_lt10 = calculate(
+          temp,
+          date,
+          resolution = survey(season = 7:18, subset = year),
+          fun = days_below,
+          threshold = 10
+        )$metric,
+        annual_median_flow = calculate(
+          flow,
+          date,
+          na.rm = TRUE,
+          standardise = by_median(subset = year, na.rm = TRUE),
+          resolution = survey(season = 7:18, subset = year)
+        )$metric,
+        annual_median_flow_tm1 = calculate(
+          flow,
+          date,
+          na.rm = TRUE,
+          standardise = by_median(subset = year, na.rm = TRUE),
+          resolution = survey(season = 7:18, subset = year, lag = 1)
+        )$metric,
+        annual_median_flow_tm2 = calculate(
+          flow,
+          date,
+          na.rm = TRUE,
+          standardise = by_median(subset = year, na.rm = TRUE),
+          resolution = survey(season = 7:18, subset = year, lag = 2)
+        )$metric,
+        annual_median_flow_tm3 = calculate(
+          flow,
+          date,
+          na.rm = TRUE,
+          standardise = by_median(subset = year, na.rm = TRUE),
+          resolution = survey(season = 7:18, subset = year, lag = 3)
+        )$metric,
+        hypoxia_risk_discharge = calculate(
+          flow,
+          date,
+          resolution = survey(season = 12:15, subset = year), 
+          fun = blackwater_fn,
+          trigger = hypoxia_threshold_discharge, 
+          na.rm = TRUE
+        )$metric,
+        hypoxia_risk_temp = calculate(
+          temp,
+          date,
+          resolution = survey(season = 12:15, subset = year), 
+          fun = blackwater_fn,
+          trigger = hypoxia_threshold_temp, 
+          type = days_above,
+          na.rm = TRUE
+        )$metric
+      ) |>
+      left_join(carrying_capacity, by = c("species", "waterbody")) |>
+      mutate(
+        lagged_median_flow = median(
+          c(annual_median_flow_tm1, annual_median_flow_tm2, annual_median_flow_tm3),
+          na.rm = TRUE
+        ),
+        kdyn = lagged_median_flow * carrying_capacity,
+        kdyn = ifelse(kdyn > 3 * carrying_capacity, 3 * carrying_capacity, kdyn),
+        hypoxia_risk = ifelse(hypoxia_risk_discharge & hypoxia_risk_temp, 1, 0)
+      )
+    
+    # rescale based on reference values
+    out <- out |>
+      mutate(
+        across(contains("proportional"), .fns = \(x) x / reference_discharge),
+        spawning_temperature = spawning_temperature / reference_temperature,
+        proportional_max_antecedent = relative_max_antecedent / reference_max,
+        proportional_max_annual = relative_max_annual / reference_max
+      ) |>
+      select(!contains("relative"))
+    
+    # convert to tibble
+    out <- as_tibble(out)
+    
   }
   
-  # return
-  as.data.frame(out)
+  # and return
+  out
   
 }
 
@@ -387,7 +435,9 @@ rolling_median <- function(x, lag, ...) {
 #    temperature triggers
 blackwater_fn <- function(x, trigger, type = days_below, ...) {
   out <- 0
-  if (type(x, trigger, ...) > 0)
+  if (length(trigger) > 1) 
+    trigger <- unique(trigger)
+  if (!is.na(trigger) & (type(x, trigger, ...) > 0))
     out <- 1
   out
 }
