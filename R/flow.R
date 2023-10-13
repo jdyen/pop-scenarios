@@ -194,16 +194,16 @@ fetch_hypoxia_risk <- function() {
 }
 
 # function calculate flow metrics from daily discharge and temperature data
-calculate_metrics <- function(data, recompile = FALSE, ...) {
+calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
   
   # check if metrics exist
-  metrics_exist <- any(grepl("metrics.qs", dir("data/")))
+  metrics_exist <- any(grepl(paste0("metrics_", suffix, ".qs"), dir("data/")))
   
   # load metrics from file if they exist and !recompile
   if (!recompile & metrics_exist) {
     
     # load from file
-    out <- qread("data/metrics.qs")
+    out <- qread(paste0("data/metrics_", suffix, ".qs"))
     
   } else {
     
@@ -413,6 +413,9 @@ calculate_metrics <- function(data, recompile = FALSE, ...) {
     
     # convert to tibble
     out <- as_tibble(out)
+    
+    # and save output
+    qsave(out, paste0("data/metrics_", suffix, ".qs"))
     
   }
   

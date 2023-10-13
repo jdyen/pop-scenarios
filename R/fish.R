@@ -47,6 +47,44 @@ reach_list <- c(
   "Thomson River_r3"
 )
 
+
+# grab reach info
+.vewh_reach_list <- c(
+  "Lower Broken Creek: Reach 3",
+  "Broken River: Reach 3",
+  "Campaspe River: Reach 4",
+  "Glenelg River: Reach 1b",
+  "Glenelg River: Reach 2",
+  "Glenelg River: Reach 3",
+  "Goulburn River: Reach 4",
+  "Loddon River: Reach 2",
+  "Loddon River: Reach 4c",
+  "Macalister River: Reach 1",
+  "MacKenzie River: Reach 3",
+  "Moorabool River: Reach 3b",
+  "Ovens River: Reach 5",
+  "Thomson River: Reach 3"
+)
+.vewh_reach_lengths <- fetch_table("eflow_reaches_20171214", "spatial", collect = TRUE)
+st_geometry(.vewh_reach_lengths) <- st_as_sfc(.vewh_reach_lengths$geom, crs = 4283)
+.vewh_reach_lengths <- .vewh_reach_lengths |>
+  mutate(
+    reach_length = st_length(geometry),
+    waterbody_reach = paste(eflowriver, vewh_reach, sep = ": Reach ")
+  ) |>
+  filter(waterbody_reach %in% .vewh_reach_list) |>
+  select(waterbody_reach, reach_length) |>
+  arrange(waterbody_reach) |>
+  mutate(
+    waterbody = gsub(": Reach ", "_r", waterbody_reach),
+    waterbody = gsub(" ", "_", waterbody),
+    waterbody = tolower(waterbody),
+    waterbody = gsub("lower_broken_creek_r3", "broken_creek_r4", waterbody),
+    waterbody = gsub("_r4c", "_r4", waterbody),
+    waterbody = gsub("_r3b", "_r3", waterbody),
+    waterbody = gsub("_r1b", "_r1", waterbody)
+  )
+
 # function to return carrying capacity as a neat tibble
 fetch_carrying_capacity <- function() {
 
