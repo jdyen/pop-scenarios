@@ -412,10 +412,10 @@ for (i in seq_along(species_list)) {
   
   # pull out flow/covariate metrics for species
   metrics_observed_sp <- metrics_observed |>
-    filter(species == all_of(species_list[i])) |>
+    filter(species == species_list[i]) |>
     select(waterbody, water_year, all_of(get_metric_names(species_list[i])))
   metrics_counterfactual_sp <- metrics_counterfactual |>
-    filter(species == all_of(species_list[i])) |>
+    filter(species == species_list[i]) |>
     select(waterbody, water_year, all_of(get_metric_names(species_list[i])))
   
   # simulate for each waterbody in turn
@@ -430,9 +430,9 @@ for (i in seq_along(species_list)) {
     
     # filter to each waterbody in turn
     metrics_observed_wb <- metrics_observed_sp |>
-      filter(waterbody == all_of(waterbodies[j]))
+      filter(waterbody == waterbodies[j])
     metrics_counterfactual_wb <- metrics_counterfactual_sp |>
-      filter(waterbody == all_of(waterbodies[j]))
+      filter(waterbody == waterbodies[j])
     
     # specify initial conditions
     initial <- specify_initial_conditions(
@@ -470,6 +470,7 @@ for (i in seq_along(species_list)) {
     )
     
     # and simulate from this model
+    # TODO: check metrics/coefs in template, seems to be mis-aligned
     sims_observed <- simulate_scenario(
       species = species_list[i],
       x = pop, 
