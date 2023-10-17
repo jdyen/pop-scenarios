@@ -344,6 +344,13 @@ calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
           fun = days_below,
           threshold = 10
         )$metric,
+        nday_lt18 = calculate(
+          temp,
+          date,
+          resolution = survey(season = 7:18, subset = year),
+          fun = days_below,
+          threshold = 18
+        )$metric,
         annual_median_flow = calculate(
           flow,
           date,

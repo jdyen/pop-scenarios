@@ -148,7 +148,9 @@ fetch_fish <- function(recompile = FALSE) {
   .species_list <- c(
     "Gadopsis marmoratus",
     "Maccullochella peelii",
-    "Melanotaenia fluviatilis"
+    "Melanotaenia fluviatilis",
+    "Perca fluviatilis",
+    "Gambusia holbrooki"
   )
   
   # check if data exist

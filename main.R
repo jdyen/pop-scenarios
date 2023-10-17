@@ -12,10 +12,17 @@
 # Author: Jian Yen (jdl.yen [at] gmail.com)
 # 
 # Date created: 5 July 2023
-# Date modified: 12 October 2023
+# Date modified: 17 October 2023
 
-# TODO: update BF template with recruitment flow effects
-#       update all templates with info from trends analysis (not many effects on adults, so be careful with this)
+# TODO: 
+#   - update BF template with recruitment flow effects
+#   - update all templates with info from trends analysis (not many effects on adults, so be careful with this)
+#   - update RBF model to be age-based
+#   - calculate percentage overhang to use as a predictor in blackfish model
+#       steps: list all ISC reaches in each VEWH reach
+#              calculate area of streambed_width_r (total area of the river segment)
+#              work out area of overhang clipped to the streambed width
+#              divide overhang by total area to give proportion overhang
 
 # load some packages
 library(qs)
@@ -34,8 +41,23 @@ source("R/utils.R")
 source("R/fish.R")
 source("R/flow.R")
 
+# settings
+set.seed(2023-10-17)
+nsim <- 10
+nburnin <- 5
+
 # load data
 cpue <- fetch_fish(recompile = FALSE)
+cpue_exotic <- cpue |> 
+  filter(grepl("perca|gambusia", scientific_name, ignore.case = TRUE))
+cpue_exotic <- cpue_exotic |>
+  mutate(waterbody = paste(
+    tolower(gsub(" ", "_", waterbody)), reach_no, sep = "_r")
+  ) |>
+  group_by(scientific_name, waterbody, survey_year) |>
+  summarise(presence = ifelse(sum(cpue) > 0, 1, 0))
+cpue <- cpue |> 
+  filter(!grepl("perca|gambusia", scientific_name, ignore.case = TRUE))
 
 # load stocking info
 stocking <- read.csv("data/stocking.csv")
@@ -175,161 +197,80 @@ metrics_counterfactual <- metrics_observed |>
 metrics_observed <- metrics_observed |>
   select(!contains("_counterfactual"))
 
-# calculate percentage overhang to use as a predictor in blackfish model
-# steps: list all ISC reaches in each VEWH reach
-#        calculate area of streambed_width_r (total area of the river segment)
-#        work out area of overhang clipped to the streambed width
-#        divide overhang by total area to give proportion overhang
-
-# initialise populations
-specify_initial_conditions <- function(species, waterbody, cpue, start, ...) {
-  
-  # stop if species isn't one of the three targets
-  stopifnot(
-    !species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
-  )
-  
-  # rename waterbody to avoid conflicts below
-  wb <- waterbody
-  
-  # pull out CPUE for the target species
-  cpue_sub <- cpue |> 
-    mutate(
-      sciname = tolower(gsub(" ", "_", scientific_name)),
-      waterbody = paste0(
-        tolower(gsub(" ", "_", waterbody)),
-        reach_no,
-        sep = "_r"
-      )
-    ) |>
-    filter(
-      sciname == species,
-      waterbody == wb,
-      survey_year == start
-    )
-  
-  # calculate total CPUE per reach
-  cpue_sub <- cpue_sub |>
-    group_by(survey_year) |>
-    summarise(
-      catch = sum(catch),
-      effort_h = sum(effort_h)
-    ) |>
-    mutate(
-      cpue = catch / effort_h,
-      cpue_max = max(cpue)
-    )
-
-  # pull out reach length for target waterbody
-  reach_length <- .vewh_reach_lengths |> 
-    filter(waterbody == wb) |>
-    pull(reach_length) |>
-    as.numeric()
-  
-  # extract carrying capacity for species and reach
-  k <- flow_futures |> 
-    rename(sciname = species) |>
-    filter(sciname == species, waterbody == wb) |>
-    pull(carrying_capacity) |>
-    unique()
-  
-  # k is 20% of capacity for river blackfish (why?)
-  if (species == "gadopis_marmoratus") 
-    k <- 0.2 * k
-  
-  # work out the rescaling rate for catch to abundance based on a capture
-  #    rate of 40%
-  adult_rescale <- (1 / 0.4) * (reach_length / 100)
-  init <- set_initial(
-    species = species,
-    cpue = cpue$cpue,
-    cpue_max = cpue$cpue_max,
-    effort_h = cpue$effort_h,
-    n = k,
-    nsim = nsim,
-    rescale = adult_rescale
-  )
-
-  # return
-  init
-  
-}
-
-
-# set up all three population models (in a list?)
-specify_pop_model <- function(species, waterbody, ntime, nstocked, ...) {
-  
-  # stop if species isn't one of the three targets
-  stopifnot(
-    !species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
-  )
-
-  # extract carrying capacity for species and reach
-  k <- flow_futures |> 
-    rename(sciname = species, wb = waterbody) |>
-    filter(sciname == species, wb == waterbody) |>
-    pull(carrying_capacity) |>
-    unique()
-  
-  # river blackfish model
-  if (species == "gadopsis_marmoratus") {
-    mod <- river_blackfish(
-      k = k,
-      ntime = ntime
-    )
-  }
-  
-  # murray cod model
-  if (species == "maccullochella_peelii") {
-    
-    # use a lookup to define system from waterbody
-    system <- switch(
-      waterbody,
-      "broken_creek_r4" = "largetrib",
-      "largetrib"
-    )
-    
-    mod <- murray_cod(
-      k = k,
-      system = system,
-      n = list(
-        # number stocked, accounting for fingerling mortality and 50:50 sex ratio
-        nstocked[seq_len(ntime)],
-        rep(0, ntime),
-        rep(0, ntime)
+# add extra metrics for rainbowfish (redfin, gambusia, instream_cover)
+#   and for blackfish (overhanging veg cover, instream_cover)
+metrics_observed <- metrics_observed |>
+  left_join(
+    cpue_exotic |>
+      mutate(
+        species = "redfin",
+        species = ifelse(
+          grepl("gambusia", scientific_name, ignore.case = TRUE),
+          "gambusia", 
+          species
+        )
+      ) |>
+      pivot_wider(
+        id_cols = c(waterbody, survey_year),
+        names_from = species,
+        values_from = presence,
+        names_prefix = "presence_"
       ),
-      ntime = ntime, 
-      start = rep(1, 3), 
-      end = rep(ntime, 3), 
-      add = c(TRUE, TRUE, TRUE),
-      p_capture = 0.1,   # 10% capture probability for any fish in slot
-      slot = c(550, 750) # slot in mm
-    )
-  }
-  
-  # rainbowfish model
-  if (species == "melanotaenia_fluviatilis") {
-    mod <- murray_rainbowfish(
-      k = k,
-      ntime = ntime
-    )
-  }
-  
-  # return
-  mod
-  
-}
+    by = c("waterbody", "water_year" = "survey_year")
+  ) |>
+  mutate(
+    presence_redfin = ifelse(is.na(presence_redfin), 0, presence_redfin),
+    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia),
+    instream_cover = 1,
+    veg_overhang = 1
+  )
+metrics_counterfactual <- metrics_counterfactual |>
+  left_join(
+    metrics_observed |> 
+      select(species, waterbody, water_year, contains("presence_"), instream_cover, veg_overhang),
+    by = c("species", "waterbody", "water_year")
+  )
 
-simulate_scenario <- function(species, x, nsim, init, metrics, coefs, ...) {
+simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 0, ...) {
   
   # stop if species isn't one of the three targets
   stopifnot(
-    !species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
+    species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
   )
   
   # river blackfish model
   if (species == "gadopsis_marmoratus") {
-    sims_init <- simulate(
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+      
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics[rep(1, nburnin), ]),
+            list(
+              coefs = coefs[1:5],
+              temperature_coefficient = coefs[6]
+            )
+          )
+        ),
+        options = list(
+          update = update_binomial_leslie,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
+    sims <- simulate(
       x,
       nsim = nsim,
       init = init,
@@ -347,11 +288,47 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, ...) {
         tidy_abundances = floor
       )
     )
+    
   }
   
   # murray cod model
   if (species == "maccullochella_peelii") {
-    sims_init <- simulate(
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+     
+      # simulate repeatedly to burn-in the inits
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics[rep(1, nburnin), ]),
+            list(threshold = 0.05),
+            list(coefs = coefs)
+          ),
+          density_dependence = list(
+            kdyn = lapply(
+              seq_len(ntime), 
+              function(.x) metrics$kdyn[.x]
+            )
+          )
+        ),
+        options = list(
+          update = update_binomial_leslie,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
+    sims <- simulate(
       x,
       nsim = nsim,
       init = init,
@@ -373,11 +350,39 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, ...) {
         tidy_abundances = floor
       )
     )
+    
   }
   
   # rainbowfish model
-  # TODO: consider updating to age-based model
   if (species == "melanotaenia_fluviatilis") {
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+      
+      # simulate repeatedly to burn-in the inits
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics),
+            list(coefs = coefs)
+          )
+        ),
+        options = list(
+          update = update_multinomial,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
     sims <- simulate(
       x,
       nsim = nsim,
@@ -393,6 +398,7 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, ...) {
         tidy_abundances = floor
       )
     )
+    
   }
   
   # return
@@ -400,53 +406,11 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, ...) {
   
 }
 
-# function to return coefficients for each species
-get_coefs <- function(species) {
-  coefs <- list(
-    "gadopsis_marmoratus" = list(
-      "glenelg_river_r1" = c(-5, 50, 50, 100, 75, 0.1),
-      "glenelg_river_r2" = c(-5, 50, 50, 100, 50, 0.1),
-      "glenelg_river_r3" = c(-5, 50, 50, 100, 50, 0.1),
-      "loddon_river_r2" = c(-5, 50, 25, 70, 80, 0.1),
-      "macalister_river_r1" = c(-5, 50, 15, 10, 20, 0.1),
-      "mackenzie_river_r3" = c(-5, 50, 25, 70, 80, 0.1),
-      "moorabool_river_r3" = c(-5, 50, 40, 40, 30, 0.1),
-      "thomson_river_r3" = c(-5, 50, 20, 10, 15, 0.1)
-    ),
-    "maccullochella_peelii" = list(
-      "broken_creek_r4" = c(0, -100, 6, -30, 100, 100),
-      "broken_river_r3" = c(-15, 35, 45, -30, 80, 25),
-      "campaspe_river_r4" = c(-60, 10, 20, -15, 45, 10),
-      "goulburn_river_r4" = c(-5, 20, 6, -10, 30, 10),
-      "loddon_river_r4" = c(-30, 20, 10, -10, 30, 10),
-      "ovens_river_r5" = c(-10, 60, 20, -30, 60, 25)
-    ),
-    "melanotaenia_fluviatilis" = list(
-      "broken_creek_r4" = c(-130, 40, 20),
-      "broken_river_r3" = c(-180, 45, 30),
-      "campaspe_river_r4" = c(-100, 10, 5),
-      "goulburn_river_r4" = c(30, -10, 20),
-      "loddon_river_r4" = c(-120, 10, 30),
-      "ovens_river_r5" = c(-20, 40, 20)
-    )
-  )
-  coefs[[species]]
-}
-
-
 # simulate for each species in turn
 species_list <- metrics_observed |> pull(species) |> unique()
 for (i in seq_along(species_list)) {
   
-  # pull out metrics for relevant species
-  get_metric_names <- function(species) {
-    metric_list <- list(
-      "gadopsis_marmoratus" = c("proportional_spring_flow"),
-      "maccullochella_peelii" = c(""),
-      "melanotaenia_fluviatilis" = c("")
-    )
-    metric_list[[species]]
-  }
+  # pull out flow/covariate metrics for species
   metrics_observed_sp <- metrics_observed |>
     filter(species == all_of(species_list[i])) |>
     select(waterbody, water_year, all_of(get_metric_names(species_list[i])))
@@ -454,15 +418,15 @@ for (i in seq_along(species_list)) {
     filter(species == all_of(species_list[i])) |>
     select(waterbody, water_year, all_of(get_metric_names(species_list[i])))
   
-  # TODO: add extra metrics for rainbowfish (redfin, gambusia, instream cover)
-  #   and for blackfish (overhanging veg cover)
-  
   # simulate for each waterbody in turn
   waterbodies <- metrics_observed_sp |> pull(waterbody) |> unique()  
   for (j in seq_along(waterbodies)) {
-    
-    # specify initial conditions
-    initial <- specify_initial_conditions(species_list[i], waterbodies[j], cpue)
+
+    # extract carrying capacity for species and reach
+    k <- flow_futures |> 
+      filter(species == species_list[i], waterbody == waterbodies[j]) |>
+      pull(carrying_capacity) |>
+      unique()
     
     # filter to each waterbody in turn
     metrics_observed_wb <- metrics_observed_sp |>
@@ -470,7 +434,18 @@ for (i in seq_along(species_list)) {
     metrics_counterfactual_wb <- metrics_counterfactual_sp |>
       filter(waterbody == all_of(waterbodies[j]))
     
-    # grab stocking info if required
+    # specify initial conditions
+    initial <- specify_initial_conditions(
+      species = species_list[i],
+      waterbody = waterbodies[j],
+      cpue = cpue,
+      start = min(metrics_observed_wb$water_year),
+      nsim = nsim,
+      k = k
+    )
+
+    # grab stocking info if required (default to zero, otherwise)
+    n_stocked <- rep(0, nrow(metrics_observed_wb))
     if (species_list[i] == "maccullochella_peelii") {
       stocking_rates <- stocking |>
         filter(
@@ -480,19 +455,39 @@ for (i in seq_along(species_list)) {
         select(Year, Number) |>
         mutate(Year = Year + 1) |>
         rename(water_year = Year, number_stocked = Number)
-      metrics_observed_wb <- metrics_observed_wb |>
-        left_join(stocking_rates, by = c("water_year"))
-      metrics_counterfactual_wb <- metrics_counterfactual_wb |>
+      n_stocked <- metrics_observed_wb |>
+        select(water_year) |>
         left_join(stocking_rates, by = c("water_year"))
     }
     
     # initialise population model for this species and waterbody
-    # TODO: make this work for all three species
-    pop <- specify_pop_model(species_list[i], waterbodies[j], metrics)
+    pop <- specify_pop_model(
+      species = species_list[i],
+      waterbody = waterbodies[j],
+      ntime = nrow(metrics_observed_wb), 
+      nstocked = n_stocked,
+      k = k
+    )
     
-    # simulate model
-    sims_observed <- simulate_scenario(species_list[i], pop_models[[species_list[i]]])
-    sims_counterfactual <- simulate_scenario(species_list[i], pop_models[[species_list[i]]])
+    # and simulate from this model
+    sims_observed <- simulate_scenario(
+      species = species_list[i],
+      x = pop, 
+      nsim = nsim, 
+      init = initial,
+      metrics = metrics_observed_wb,
+      coefs = get_coefs(species_list[i], waterbodies[j]),
+      nburnin = nburnin
+    )
+    sims_counterfactual <- simulate_scenario(
+      species = species_list[i],
+      x = pop, 
+      nsim = nsim, 
+      init = initial,
+      metrics = metrics_counterfactual_wb,
+      coefs = get_coefs(species_list[i], waterbodies[j]),
+      nburnin = nburnin
+    )
     
     # save output
     qsave(

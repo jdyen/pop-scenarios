@@ -64,3 +64,202 @@ set_initial <- function(
   )
   
 }
+
+# function to initialise populations
+specify_initial_conditions <- function(species, waterbody, cpue, start, nsim, k, ...) {
+  
+  # stop if species isn't one of the three targets
+  stopifnot(
+    species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
+  )
+  
+  # rename waterbody to avoid conflicts below
+  wb <- waterbody
+  
+  # pull out CPUE for the target species
+  cpue_sub <- cpue |> 
+    mutate(
+      sciname = tolower(gsub(" ", "_", scientific_name)),
+      waterbody = paste(
+        tolower(gsub(" ", "_", waterbody)),
+        reach_no,
+        sep = "_r"
+      )
+    ) |>
+    filter(
+      sciname == species,
+      waterbody == wb,
+      survey_year == start
+    )
+  
+  # calculate total CPUE per reach
+  cpue_sub <- cpue_sub |>
+    group_by(survey_year) |>
+    summarise(
+      catch = sum(catch),
+      effort_h = sum(effort_h)
+    ) |>
+    mutate(
+      cpue = catch / effort_h,
+      cpue_max = max(cpue)
+    )
+  
+  # pull out reach length for target waterbody
+  reach_length <- .vewh_reach_lengths |> 
+    filter(waterbody == wb) |>
+    pull(reach_length) |>
+    as.numeric()
+  
+  # k is 20% of capacity for river blackfish (why?)
+  if (species == "gadopsis_marmoratus") 
+    k <- 0.2 * k
+  
+  # work out the rescaling rate for catch to abundance based on a capture
+  #    rate of 40%
+  adult_rescale <- (1 / 0.4) * (reach_length / 100)
+  init <- set_initial(
+    species = species,
+    cpue = cpue_sub$cpue,
+    cpue_max = cpue_sub$cpue_max,
+    effort_h = cpue_sub$effort_h,
+    n = k,
+    nsim = nsim,
+    rescale = adult_rescale
+  )
+  
+  # return
+  init
+  
+}
+
+# function to set up all three population models
+specify_pop_model <- function(species, waterbody, ntime, nstocked, k, ...) {
+  
+  # stop if species isn't one of the three targets
+  stopifnot(
+    species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
+  )
+  
+  # river blackfish model
+  if (species == "gadopsis_marmoratus") {
+    mod <- river_blackfish(
+      k = k,
+      ntime = ntime
+    )
+  }
+  
+  # murray cod model
+  if (species == "maccullochella_peelii") {
+    
+    # use a lookup to define system from waterbody
+    system <- switch(
+      waterbody,
+      "broken_creek_r4" = "broken_creek",
+      "broken_river_r3" = "broken_river",
+      "campaspe_river_r4" = "campaspe_river",
+      "goulburn_river_r4" = "goulburn_river",
+      "loddon_river_r4" = "campaspe_river",
+      "ovens_river_r5" = "ovens_river",
+      "murray_river"
+    )
+    
+    mod <- murray_cod(
+      k = k,
+      system = system,
+      n = list(
+        # number stocked, accounting for fingerling mortality and 50:50 sex ratio
+        nstocked[seq_len(ntime)],
+        rep(0, ntime),
+        rep(0, ntime)
+      ),
+      ntime = ntime, 
+      start = rep(1, 3), 
+      end = rep(ntime, 3), 
+      add = c(TRUE, TRUE, TRUE),
+      p_capture = 0.1,   # 10% capture probability for any fish in slot
+      slot = c(550, 750) # slot in mm
+    )
+  }
+  
+  # rainbowfish model
+  if (species == "melanotaenia_fluviatilis") {
+    mod <- murray_rainbowfish(
+      k = k,
+      ntime = ntime
+    )
+  }
+  
+  # return
+  mod
+  
+}
+
+# function to return coefficients for each species
+get_coefs <- function(species, waterbody) {
+  coefs <- list(
+    "gadopsis_marmoratus" = list(
+      "glenelg_river_r1" = c(-5, 50, 50, 100, 75, 0.1),
+      "glenelg_river_r2" = c(-5, 50, 50, 100, 50, 0.1),
+      "glenelg_river_r3" = c(-5, 50, 50, 100, 50, 0.1),
+      "loddon_river_r2" = c(-5, 50, 25, 70, 80, 0.1),
+      "macalister_river_r1" = c(-5, 50, 15, 10, 20, 0.1),
+      "mackenzie_river_r3" = c(-5, 50, 25, 70, 80, 0.1),
+      "moorabool_river_r3" = c(-5, 50, 40, 40, 30, 0.1),
+      "thomson_river_r3" = c(-5, 50, 20, 10, 15, 0.1)
+    ),
+    "maccullochella_peelii" = list(
+      "broken_creek_r4" = c(0, -100, 6, -30, 100, 100),
+      "broken_river_r3" = c(-15, 35, 45, -30, 80, 25),
+      "campaspe_river_r4" = c(-60, 10, 20, -15, 45, 10),
+      "goulburn_river_r4" = c(-5, 20, 6, -10, 30, 10),
+      "loddon_river_r4" = c(-30, 20, 10, -10, 30, 10),
+      "ovens_river_r5" = c(-10, 60, 20, -30, 60, 25)
+    ),
+    "melanotaenia_fluviatilis" = list(
+      "broken_creek_r4" = c(-130, 40, 20),
+      "broken_river_r3" = c(-180, 45, 30),
+      "campaspe_river_r4" = c(-100, 10, 5),
+      "goulburn_river_r4" = c(30, -10, 20),
+      "loddon_river_r4" = c(-120, 10, 30),
+      "ovens_river_r5" = c(-20, 40, 20)
+    )
+  )
+  coefs[[species]][[waterbody]]
+}
+
+# function to pull out names of all metrics for relevant species
+get_metric_names <- function(species) {
+  metric_list <- list(
+    "gadopsis_marmoratus" = c(
+      "spawning_flow_variability",
+      "proportional_spring_flow",
+      "proportional_summer_flow",
+      "proportional_winter_flow",
+      "proportional_antecedent_flow",
+      "nday_lt5",
+      "nday_gt16",
+      "nday_lt18",
+      "instream_cover",
+      "veg_overhang"  # not included in template yet
+    ),
+    "maccullochella_peelii" = c(
+      "spawning_flow_variability",
+      "proportional_spring_flow",
+      "proportional_max_antecedent",
+      "proportional_summer_flow",
+      "proportional_winter_flow",
+      "spawning_temperature"
+    ),
+    "melanotaenia_fluviatilis" = c(
+      "nday_lt10",
+      "nday_gt20",
+      "redfin",
+      "gambusia",
+      "instream_cover",
+      "spawning_flow_variability",
+      "proportional_spring_flow",
+      "proportional_summer_flow"
+    )
+  )
+  metric_list[[species]]
+}
