@@ -231,185 +231,44 @@ metrics_counterfactual <- metrics_counterfactual |>
     by = c("species", "waterbody", "water_year")
   )
 
-simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 0, ...) {
-  
-  # stop if species isn't one of the three targets
-  stopifnot(
-    species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
+# repeat for future metrics, but just use most recent observations to project
+#   future occurrences
+max_year <- cpue_exotic |>
+  group_by(waterbody) |>
+  summarise(max_year = max(survey_year))
+metrics_future <- metrics_future |>
+  left_join(
+    cpue_exotic |>
+      mutate(
+        species = "redfin",
+        species = ifelse(
+          grepl("gambusia", scientific_name, ignore.case = TRUE),
+          "gambusia", 
+          species
+        )
+      ) |>
+      pivot_wider(
+        id_cols = c(waterbody, survey_year),
+        names_from = species,
+        values_from = presence,
+        names_prefix = "presence_"
+      ) |>
+      left_join(max_year, by = "waterbody") |>
+      filter(survey_year == max_year) |>
+      select(contains("presence_"), waterbody),
+    by = c("waterbody")
+  ) |>
+  mutate(
+    presence_redfin = ifelse(is.na(presence_redfin), 0, presence_redfin),
+    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia),
+    instream_cover = 1,
+    veg_overhang = 1
   )
-  
-  # river blackfish model
-  if (species == "gadopsis_marmoratus") {
-    
-    # include a short loop to stabilise the initial conditions if 
-    #   required
-    if (nburnin > 0) {
-      
-      sims <- simulate(
-        x,
-        nsim = nsim,
-        init = init,
-        args = list(
-          covariates = c(
-            format_covariates(metrics[rep(1, nburnin), ]),
-            list(
-              coefs = coefs[1:5],
-              temperature_coefficient = coefs[6]
-            )
-          )
-        ),
-        options = list(
-          update = update_binomial_leslie,
-          tidy_abundances = floor
-        )
-      )
-      
-      # pull out final iteration as the starting point for main sims
-      init <- sims[, , nburnin] 
-      
-    }
-    
-    # main simulation
-    sims <- simulate(
-      x,
-      nsim = nsim,
-      init = init,
-      args = list(
-        covariates = c(
-          format_covariates(metrics),
-          list(
-            coefs = coefs[1:5],
-            temperature_coefficient = coefs[6]
-          )
-        )
-      ),
-      options = list(
-        update = update_binomial_leslie,
-        tidy_abundances = floor
-      )
-    )
-    
-  }
-  
-  # murray cod model
-  if (species == "maccullochella_peelii") {
-    
-    # include a short loop to stabilise the initial conditions if 
-    #   required
-    if (nburnin > 0) {
-     
-      # simulate repeatedly to burn-in the inits
-      sims <- simulate(
-        x,
-        nsim = nsim,
-        init = init,
-        args = list(
-          covariates = c(
-            format_covariates(metrics[rep(1, nburnin), ]),
-            list(threshold = 0.05),
-            list(coefs = coefs)
-          ),
-          density_dependence = list(
-            kdyn = lapply(
-              seq_len(ntime), 
-              function(.x) metrics$kdyn[.x]
-            )
-          )
-        ),
-        options = list(
-          update = update_binomial_leslie,
-          tidy_abundances = floor
-        )
-      )
-      
-      # pull out final iteration as the starting point for main sims
-      init <- sims[, , nburnin] 
-      
-    }
-    
-    # main simulation
-    sims <- simulate(
-      x,
-      nsim = nsim,
-      init = init,
-      args = list(
-        covariates = c(
-          format_covariates(metrics),
-          list(threshold = 0.05),
-          list(coefs = coefs)
-        ),
-        density_dependence = list(
-          kdyn = lapply(
-            seq_len(ntime), 
-            function(.x) metrics$kdyn[.x]
-          )
-        )
-      ),
-      options = list(
-        update = update_binomial_leslie,
-        tidy_abundances = floor
-      )
-    )
-    
-  }
-  
-  # rainbowfish model
-  if (species == "melanotaenia_fluviatilis") {
-    
-    # include a short loop to stabilise the initial conditions if 
-    #   required
-    if (nburnin > 0) {
-      
-      # simulate repeatedly to burn-in the inits
-      sims <- simulate(
-        x,
-        nsim = nsim,
-        init = init,
-        args = list(
-          covariates = c(
-            format_covariates(metrics),
-            list(coefs = coefs)
-          )
-        ),
-        options = list(
-          update = update_multinomial,
-          tidy_abundances = floor
-        )
-      )
-      
-      # pull out final iteration as the starting point for main sims
-      init <- sims[, , nburnin] 
-      
-    }
-    
-    # main simulation
-    sims <- simulate(
-      x,
-      nsim = nsim,
-      init = init,
-      args = list(
-        covariates = c(
-          format_covariates(metrics),
-          list(coefs = coefs)
-        )
-      ),
-      options = list(
-        update = update_multinomial,
-        tidy_abundances = floor
-      )
-    )
-    
-  }
-  
-  # return
-  sims
-  
-}
 
 # simulate for each species in turn
 species_list <- metrics_observed |> pull(species) |> unique()
 for (i in seq_along(species_list)) {
-  
+
   # pull out flow/covariate metrics for species
   metrics_observed_sp <- metrics_observed |>
     filter(species == species_list[i]) |>
@@ -417,6 +276,26 @@ for (i in seq_along(species_list)) {
   metrics_counterfactual_sp <- metrics_counterfactual |>
     filter(species == species_list[i]) |>
     select(waterbody, water_year, all_of(get_metric_names(species_list[i])))
+
+  # rename a few metrics for some species
+  if (species_list[i] == "gadopsis_marmoratus") {
+    metrics_observed_sp <- metrics_observed_sp |>
+      rename(antecedent_flow = proportional_antecedent_flow)
+    metrics_counterfactual_sp <- metrics_counterfactual_sp |>
+      rename(antecedent_flow = proportional_antecedent_flow)
+  }
+  if (species_list[i] == "maccullochella_peelii") {
+    metrics_observed_sp <- metrics_observed_sp |>
+      rename(blackwater_risk = hypoxia_risk)
+    metrics_counterfactual_sp <- metrics_counterfactual_sp |>
+      rename(blackwater_risk = hypoxia_risk)
+  }
+  if (species_list[i] == "melanotaenia_fluviatilis") {
+    metrics_observed_sp <- metrics_observed_sp |>
+      rename(redfin = presence_redfin, gambusia = presence_gambusia)
+    metrics_counterfactual_sp <- metrics_counterfactual_sp |>
+      rename(redfin = presence_redfin, gambusia = presence_gambusia)
+  }
   
   # simulate for each waterbody in turn
   waterbodies <- metrics_observed_sp |> pull(waterbody) |> unique()  
@@ -446,6 +325,14 @@ for (i in seq_along(species_list)) {
 
     # grab stocking info if required (default to zero, otherwise)
     n_stocked <- rep(0, nrow(metrics_observed_wb))
+    system_lu <- c(
+      "broken_creek_r4" = "Broken Creek",
+      "broken_river_r3" = "Broken River",
+      "campaspe_river_r4" = "Campaspe River",
+      "goulburn_river_r4" = "Goulburn River",
+      "loddon_river_r4" = "Loddon River",
+      "ovens_river_r5" = "Ovens River"
+    )
     if (species_list[i] == "maccullochella_peelii") {
       stocking_rates <- stocking |>
         filter(
@@ -457,7 +344,9 @@ for (i in seq_along(species_list)) {
         rename(water_year = Year, number_stocked = Number)
       n_stocked <- metrics_observed_wb |>
         select(water_year) |>
-        left_join(stocking_rates, by = c("water_year"))
+        left_join(stocking_rates, by = c("water_year")) |>
+        mutate(number_stocked = ifelse(is.na(number_stocked), 0, number_stocked)) |>
+        pull(number_stocked)
     }
     
     # initialise population model for this species and waterbody
@@ -470,7 +359,6 @@ for (i in seq_along(species_list)) {
     )
     
     # and simulate from this model
-    # TODO: check metrics/coefs in template, seems to be mis-aligned
     sims_observed <- simulate_scenario(
       species = species_list[i],
       x = pop, 
@@ -507,7 +395,7 @@ for (i in seq_along(species_list)) {
         waterbody == waterbodies[j]
       ) |>
       distinct(future, future_next, scenario, scenario_next)
-    for (k in seq_len(nrow(future_sub))) {
+    for (ff in seq_len(nrow(future_sub))) {
       
       # extract initial conditions from sims_observed
       initial_future <- sims_observed[, , dim(sims_observed)[3]]
@@ -517,21 +405,43 @@ for (i in seq_along(species_list)) {
         filter(
           species == species_list[i],
           waterbody == waterbodies[j],
-          future == future_sub$future[k],
-          future_next == future_sub$future_next[k],
-          scenario == future_sub$scenario[k],
-          scenario_next == future_sub$scenario_next[k]
+          future == future_sub$future[ff],
+          future_next == future_sub$future_next[ff],
+          scenario == future_sub$scenario[ff],
+          scenario_next == future_sub$scenario_next[ff]
         )
       
+      # rename a few metrics for some species
+      if (species_list[i] == "gadopsis_marmoratus") {
+        metrics_future_sub <- metrics_future_sub |>
+          rename(antecedent_flow = proportional_antecedent_flow)
+      }
+      if (species_list[i] == "maccullochella_peelii") {
+        metrics_future_sub <- metrics_future_sub |>
+          rename(blackwater_risk = hypoxia_risk)
+      }
+      if (species_list[i] == "melanotaenia_fluviatilis") {
+        metrics_future_sub <- metrics_future_sub |>
+          rename(redfin = presence_redfin, gambusia = presence_gambusia)
+      }
+      
       # simulate under the specific scenario
-      sims_future <- simulate_scenario(species_list[i], pop_models[[species_list[i]]])
+      sims_future <- simulate_scenario(
+        species = species_list[i],
+        x = pop, 
+        nsim = nsim, 
+        init = initial_future,
+        metrics = metrics_future_sub,
+        coefs = get_coefs(species_list[i], waterbodies[j]),
+        nburnin = nburnin
+      )
       
       # and save output
       future_name <- paste(
-        future_sub$future[k],
-        future_sub$future_next[k],
-        future_sub$scenario[k],
-        future_sub$scenario_next[k],
+        future_sub$future[ff],
+        future_sub$future_next[ff],
+        future_sub$scenario[ff],
+        future_sub$scenario_next[ff],
         sep = "_"
       )
       qsave(

@@ -46,8 +46,12 @@ set_initial <- function(
   
   # set a min value if cpue_adult = 0
   if (n_scaled == 0) {
-    cpue_min <- min(c(cpue_max, 1)) / effort_h
-    n_scaled <- n * (cpue_min / cpue_max)
+    if (cpue_max > 0) {
+      cpue_min <- min(c(cpue_max, 1)) / effort_h
+      n_scaled <- n * (cpue_min / cpue_max)
+    } else {
+      n_scaled <- 1 / effort_h
+    }
   }
   
   # standardise this for adult abundances only
@@ -88,20 +92,21 @@ specify_initial_conditions <- function(species, waterbody, cpue, start, nsim, k,
     ) |>
     filter(
       sciname == species,
-      waterbody == wb,
-      survey_year == start
-    )
+      waterbody == wb
+    ) |>
+    mutate(cpue_max = max(catch / effort_h)) |>
+    filter(survey_year == start)
   
   # calculate total CPUE per reach
   cpue_sub <- cpue_sub |>
     group_by(survey_year) |>
     summarise(
+      cpue_max = unique(cpue_max),
       catch = sum(catch),
       effort_h = sum(effort_h)
     ) |>
     mutate(
-      cpue = catch / effort_h,
-      cpue_max = max(cpue)
+      cpue = catch / effort_h
     )
   
   # pull out reach length for target waterbody
@@ -248,13 +253,16 @@ get_metric_names <- function(species) {
       "proportional_max_antecedent",
       "proportional_summer_flow",
       "proportional_winter_flow",
-      "spawning_temperature"
+      "spawning_temperature",
+      "hypoxia_risk",
+      "minimum_daily_flow",
+      "carrying_capacity"
     ),
     "melanotaenia_fluviatilis" = c(
       "nday_lt10",
       "nday_gt20",
-      "redfin",
-      "gambusia",
+      "presence_redfin",
+      "presence_gambusia",
       "instream_cover",
       "spawning_flow_variability",
       "proportional_spring_flow",
@@ -262,4 +270,181 @@ get_metric_names <- function(species) {
     )
   )
   metric_list[[species]]
+}
+
+# function to simulate a pop model for a single species based on input
+#    metrics and coefficients
+simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 0, ...) {
+  
+  # stop if species isn't one of the three targets
+  stopifnot(
+    species %in% c("gadopsis_marmoratus", "maccullochella_peelii", "melanotaenia_fluviatilis")
+  )
+  
+  # river blackfish model
+  if (species == "gadopsis_marmoratus") {
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+      
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics[rep(1, nburnin), ]),
+            list(
+              coefs = coefs[1:5],
+              temperature_coefficient = coefs[6]
+            )
+          )
+        ),
+        options = list(
+          update = update_binomial_leslie,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
+    sims <- simulate(
+      x,
+      nsim = nsim,
+      init = init,
+      args = list(
+        covariates = c(
+          format_covariates(metrics),
+          list(
+            coefs = coefs[1:5],
+            temperature_coefficient = coefs[6]
+          )
+        )
+      ),
+      options = list(
+        update = update_binomial_leslie,
+        tidy_abundances = floor
+      )
+    )
+    
+  }
+  
+  # murray cod model
+  if (species == "maccullochella_peelii") {
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+      
+      # simulate repeatedly to burn-in the inits
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics[rep(1, nburnin), ]),
+            list(threshold = 0.05),
+            list(coefs = coefs)
+          ),
+          density_dependence = list(
+            kdyn = lapply(
+              rep(1, nburnin), 
+              function(.x) metrics$carrying_capacity[.x]
+            )
+          )
+        ),
+        options = list(
+          update = update_binomial_leslie,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
+    sims <- simulate(
+      x,
+      nsim = nsim,
+      init = init,
+      args = list(
+        covariates = c(
+          format_covariates(metrics),
+          list(threshold = 0.05),
+          list(coefs = coefs)
+        ),
+        density_dependence = list(
+          kdyn = lapply(
+            seq_len(nrow(metrics)), 
+            function(.x) metrics$carrying_capacity[.x]
+          )
+        )
+      ),
+      options = list(
+        update = update_binomial_leslie,
+        tidy_abundances = floor
+      )
+    )
+    
+  }
+  
+  # rainbowfish model
+  if (species == "melanotaenia_fluviatilis") {
+    
+    # include a short loop to stabilise the initial conditions if 
+    #   required
+    if (nburnin > 0) {
+      
+      # simulate repeatedly to burn-in the inits
+      sims <- simulate(
+        x,
+        nsim = nsim,
+        init = init,
+        args = list(
+          covariates = c(
+            format_covariates(metrics[rep(1, nburnin), ]),
+            list(coefs = coefs)
+          )
+        ),
+        options = list(
+          update = update_multinomial,
+          tidy_abundances = floor
+        )
+      )
+      
+      # pull out final iteration as the starting point for main sims
+      init <- sims[, , nburnin] 
+      
+    }
+    
+    # main simulation
+    sims <- simulate(
+      x,
+      nsim = nsim,
+      init = init,
+      args = list(
+        covariates = c(
+          format_covariates(metrics),
+          list(coefs = coefs)
+        )
+      ),
+      options = list(
+        update = update_multinomial,
+        tidy_abundances = floor
+      )
+    )
+    
+  }
+  
+  # return
+  sims
+  
 }
