@@ -94,8 +94,18 @@ specify_initial_conditions <- function(species, waterbody, cpue, start, nsim, k,
       sciname == species,
       waterbody == wb
     ) |>
-    mutate(cpue_max = max(catch / effort_h)) |>
-    filter(survey_year == start)
+    mutate(cpue_max = max(catch / effort_h))
+  
+  # work out the minimum starting year that's actually in the data
+  if (start %in% cpue_sub$survey_year) {
+    cpue_sub <- cpue_sub |>
+      filter(survey_year == start)
+  } else {
+    start <- abs(start - unique(cpue_sub$survey_year))
+    start <- unique(cpue_sub$survey_year)[which.min(start)]
+    cpue_sub <- cpue_sub |>
+      filter(survey_year == start)
+  }
   
   # calculate total CPUE per reach
   cpue_sub <- cpue_sub |>
@@ -446,5 +456,57 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 
   
   # return
   sims
+  
+}
+
+# function to load simulated scenarios and parse scenarios from filenames
+load_simulated <- function(type, species) {
+  
+  # list all saved simulations
+  sim_list <- dir("outputs/simulated/")
+  
+  # filter to target type and species
+  sim_list_sub <- sim_list[
+    grepl(paste(type, species, sep = "-"), sim_list, ignore.case = TRUE)
+  ]
+  out <- lapply(sim_list_sub, \(x) qread(paste0("outputs/simulated/", x)))
+  
+  # parse names
+  waterbody <- sapply(strsplit(sim_list_sub, split = "-"), \(x) x[3])
+  if (type == "future") {
+    
+    # work out the scenario as well as the system
+    scenario <- sapply(strsplit(sim_list_sub, split = "-"), \(x) x[4])
+    scenario <- gsub(".qs", "", scenario)
+    
+    # split it up by climate and flows, and add waterbody info
+    naming_fn <- function(x, wb) {
+      tibble(
+        waterbody = wb,
+        future = x[1],
+        future_next = x[2],
+        scenario = x[3],
+        scenario_next = x[4]
+      )
+    }
+    scenario <- strsplit(scenario, "_") |>
+      mapply(FUN = naming_fn, wb = waterbody, SIMPLIFY = FALSE) |>
+      bind_rows()
+    
+  } else {
+    
+    # just strip the file suffix from hte system name
+    waterbody <- gsub(".qs", "", waterbody)
+    
+    # reformat
+    scenario <- tibble(waterbody = waterbody)
+    
+  }
+  
+  # and return
+  list(
+    scenario = scenario,
+    sims = out
+  )
   
 }

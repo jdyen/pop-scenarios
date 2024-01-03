@@ -65,7 +65,7 @@ reach_list <- c(
   "Ovens River: Reach 5",
   "Thomson River: Reach 3"
 )
-.vewh_reach_lengths <- fetch_table("eflow_reaches_20171214", "spatial", collect = TRUE)
+.vewh_reach_lengths <- fetch_table("eflow_reaches_20171214", "projects", collect = TRUE)
 st_geometry(.vewh_reach_lengths) <- st_as_sfc(.vewh_reach_lengths$geom, crs = 4283)
 .vewh_reach_lengths <- .vewh_reach_lengths |>
   mutate(
