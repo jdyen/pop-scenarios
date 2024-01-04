@@ -213,14 +213,14 @@ specify_pop_model <- function(species, waterbody, ntime, nstocked, k, ...) {
 get_coefs <- function(species, waterbody) {
   coefs <- list(
     "gadopsis_marmoratus" = list(
-      "glenelg_river_r1" = c(-5, 50, 50, 100, 75, 0.1),
-      "glenelg_river_r2" = c(-5, 50, 50, 100, 50, 0.1),
-      "glenelg_river_r3" = c(-5, 50, 50, 100, 50, 0.1),
-      "loddon_river_r2" = c(-5, 50, 25, 70, 80, 0.1),
-      "macalister_river_r1" = c(-5, 50, 15, 10, 20, 0.1),
-      "mackenzie_river_r3" = c(-5, 50, 25, 70, 80, 0.1),
-      "moorabool_river_r3" = c(-5, 50, 40, 40, 30, 0.1),
-      "thomson_river_r3" = c(-5, 50, 20, 10, 15, 0.1)
+      "glenelg_river_r1" = c(-5, 50, 50, 100, 75, 0.1, 0.05),
+      "glenelg_river_r2" = c(-5, 50, 50, 100, 50, 0.1, 0.05),
+      "glenelg_river_r3" = c(-5, 50, 50, 100, 50, 0.1, 0.05),
+      "loddon_river_r2" = c(-5, 50, 25, 70, 80, 0.1, 0.05),
+      "macalister_river_r1" = c(-5, 50, 15, 10, 20, 0.1, 0.05),
+      "mackenzie_river_r3" = c(-5, 50, 25, 70, 80, 0.1, 0.05),
+      "moorabool_river_r3" = c(-5, 50, 40, 40, 30, 0.1, 0.05),
+      "thomson_river_r3" = c(-5, 50, 20, 10, 15, 0.1, 0.05)
     ),
     "maccullochella_peelii" = list(
       "broken_creek_r4" = c(0, -100, 6, -30, 100, 100),
@@ -231,12 +231,12 @@ get_coefs <- function(species, waterbody) {
       "ovens_river_r5" = c(-10, 60, 20, -30, 60, 25)
     ),
     "melanotaenia_fluviatilis" = list(
-      "broken_creek_r4" = c(-130, 40, 20),
-      "broken_river_r3" = c(-180, 45, 30),
-      "campaspe_river_r4" = c(-100, 10, 5),
-      "goulburn_river_r4" = c(30, -10, 20),
-      "loddon_river_r4" = c(-120, 10, 30),
-      "ovens_river_r5" = c(-20, 40, 20)
+      "broken_creek_r4" = c(-0.05, 40, 20, 0.2, 0.05),
+      "broken_river_r3" = c(-0.1, 45, 30, 0.2, 0.05),
+      "campaspe_river_r4" = c(-0.05, 10, 5, 0.2, 0.05),
+      "goulburn_river_r4" = c(30, -10, 20, 0.2, 0.05),
+      "loddon_river_r4" = c(-0.05, 10, 30, 0.2, 0.05),
+      "ovens_river_r5" = c(-0.02, 40, 20, 0.2, 0.05)
     )
   )
   coefs[[species]][[waterbody]]
@@ -307,7 +307,8 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 
             format_covariates(metrics[rep(1, nburnin), ]),
             list(
               coefs = coefs[1:5],
-              temperature_coefficient = coefs[6]
+              temperature_coefficient = coefs[6],
+              coldwater_coefficient = coefs[7]
             )
           )
         ),
@@ -332,7 +333,8 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 
           format_covariates(metrics),
           list(
             coefs = coefs[1:5],
-            temperature_coefficient = coefs[6]
+            temperature_coefficient = coefs[6],
+            coldwater_coefficient = coefs[7]
           )
         )
       ),
@@ -421,7 +423,11 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 
         args = list(
           covariates = c(
             format_covariates(metrics[rep(1, nburnin), ]),
-            list(coefs = coefs)
+            list(
+              coefs = coefs[1:3],
+              warmwater_coefficient = coefs[4],
+              coldwinter_coefficient = coefs[5]
+            )
           )
         ),
         options = list(
@@ -443,7 +449,11 @@ simulate_scenario <- function(species, x, nsim, init, metrics, coefs, nburnin = 
       args = list(
         covariates = c(
           format_covariates(metrics),
-          list(coefs = coefs)
+          list(
+            coefs = coefs[1:3],
+            warmwater_coefficient = coefs[4],
+            coldwinter_coefficient = coefs[5]
+          )
         )
       ),
       options = list(

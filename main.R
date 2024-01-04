@@ -4,26 +4,23 @@
 #    Murray-Darling rainbowfish (Melanotaenia fluviatilis)
 # 
 # Flow scenarios consider observed daily flows with and without
-#   environmental water allocations from 2000-2023 and projected
-#   daily flows under a scenario of climate change rescaled to 
-#   match catchment-specific predicted runoff under the RCP 8.5 
-#   emissions scenario projected to 2040.
+#   environmental water allocations from 2009-2023 and near-term (to 2025) 
+#   forecasts of flows under different plausible climates and
+#   flow management strategies
 #
 # Author: Jian Yen (jdl.yen [at] gmail.com)
 # 
 # Date created: 5 July 2023
-# Date modified: 3 January 2024
+# Date modified: 4 January 2024
 
 # TODO: 
 #   - update RBF and BF templates to increase average pop growth rates (flat-lining in most cases)
-#   - update BF template with recruitment flow effects
-#   - update all templates with info from trends analysis (not many effects on adults, so be careful with this)
+#     - BF done (coldwater impacts too strong)
+#     - TODO: RBF
+#   - update BF template with recruitment flow effects (??) and with overhang info
+#      - template doens't need changing? Check
 #   - update RBF model to be age-based
-#   - calculate percentage overhang to use as a predictor in blackfish model
-#       steps: list all ISC reaches in each VEWH reach
-#              calculate area of streambed_width_r (total area of the river segment)
-#              work out area of overhang clipped to the streambed width
-#              divide overhang by total area to give proportion overhang
+#   - check new metrics (voerhang and iwh) to make sure they're incorporated in all templates
 
 # load some packages
 library(qs)
@@ -46,9 +43,9 @@ source("R/flow.R")
 
 # settings
 set.seed(2023-10-17)
-nsim <- 10
-nburnin <- 5
-simulate_again <- FALSE
+nsim <- 200
+nburnin <- 10
+simulate_again <- TRUE
 
 # load data
 cpue <- fetch_fish(recompile = FALSE)
@@ -203,6 +200,66 @@ metrics_observed <- metrics_observed |>
 
 # add extra metrics for rainbowfish (redfin, gambusia, instream_cover)
 #   and for blackfish (overhanging veg cover, instream_cover)
+veg_overhang <- read.csv("data/eflow_veg_overhang_231113.csv")
+veg_overhang <- veg_overhang |>
+  as_tibble() |>
+  mutate(
+    waterbody = gsub(" ", "_", tolower(waterbody)),
+    waterbody = paste(waterbody, vewh_reach, sep = "_r")
+  ) |>
+  filter(waterbody %in% unique(metrics_observed$waterbody)) |>
+  mutate(proportion_overhang = overhang_area_m2 / buff5m_area_m2)
+instream_cover <- read.csv("data/vefmap_habitat_site_metrics_231208.csv")
+instream_cover <- instream_cover |>
+  left_join(
+    fetch_site_info(instream_cover) |> 
+      select(id_site, reach_no) |> 
+      collect(),
+    by = "id_site"
+  )
+instream_cover <- instream_cover |>
+  group_by(waterbody, reach_no) |>
+  summarise(
+    iwh = median(cur_pred_m3_m2, na.rm = TRUE),
+    proportion_overhang = median(mean_vo_percentage, na.rm = TRUE) / 100
+  ) |>
+  ungroup() |>
+  mutate(
+    waterbody = gsub(" ", "_", tolower(waterbody)),
+    waterbody = paste(waterbody, reach_no, sep = "_r")
+  )
+veg_overhang <- veg_overhang |>
+  select(waterbody, proportion_overhang) |>
+  full_join(
+    instream_cover |> select(-reach_no),
+    by = "waterbody",
+    suffix = c("", "_hab_metrics")
+  ) |>
+  mutate(
+    proportion_overhang_hab_metrics = ifelse(
+      is.na(proportion_overhang_hab_metrics),
+      1.2 * proportion_overhang, 
+      proportion_overhang_hab_metrics
+    ),
+    iwh = ifelse(waterbody == "loddon_river_r2", 0.0199, iwh),
+    iwh = ifelse(waterbody == "macalister_river_r1", 0.00716, iwh),
+    iwh = ifelse(waterbody == "mackenzie_river_r3", 0.00886, iwh),
+    iwh = ifelse(waterbody == "ovens_river_r5", max(iwh, na.rm = TRUE), iwh),
+    iwh = ifelse(waterbody == "moorabool_river_r0", 0.0145, iwh),
+  ) |>
+  bind_rows(
+    tibble(
+      waterbody = c("broken_creek_r4", "loddon_river_r4"),
+      proportion_overhang = rep(NA, 2),
+      iwh = c(0.0128, 0.00471),
+      proportion_overhang_hab_metrics = c(0.797, 0.641)
+    )
+  ) |>
+  mutate(
+    iwh = iwh / max(iwh),
+    proportion_overhang_hab_metrics = proportion_overhang_hab_metrics / 
+      max(proportion_overhang_hab_metrics)
+  )
 metrics_observed <- metrics_observed |>
   left_join(
     cpue_exotic |>
@@ -224,9 +281,16 @@ metrics_observed <- metrics_observed |>
   ) |>
   mutate(
     presence_redfin = ifelse(is.na(presence_redfin), 0, presence_redfin),
-    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia),
-    instream_cover = 1,
-    veg_overhang = 1
+    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia)
+  ) |>
+  left_join(
+    veg_overhang |>
+      select(waterbody, iwh, proportion_overhang_hab_metrics) |>
+      rename(
+        instream_cover = iwh, 
+        veg_overhang = proportion_overhang_hab_metrics
+      ),
+    by = "waterbody"
   )
 metrics_counterfactual <- metrics_counterfactual |>
   left_join(
@@ -264,9 +328,16 @@ metrics_future <- metrics_future |>
   ) |>
   mutate(
     presence_redfin = ifelse(is.na(presence_redfin), 0, presence_redfin),
-    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia),
-    instream_cover = 1,
-    veg_overhang = 1
+    presence_gambusia = ifelse(is.na(presence_gambusia), 0, presence_gambusia)
+  ) |>
+  left_join(
+    veg_overhang |>
+      select(waterbody, iwh, proportion_overhang_hab_metrics) |>
+      rename(
+        instream_cover = iwh, 
+        veg_overhang = proportion_overhang_hab_metrics
+      ),
+    by = "waterbody"
   )
 
 # simulate for each species in turn (if required)
@@ -480,9 +551,10 @@ iter <- 2000
 warmup <- 1000
 chains <- 4
 cores <- 4
+use_cached <- FALSE
 cpue_mc <- estimate_cpue(
   x = cpue, 
-  use_cached = FALSE,
+  use_cached = use_cached,
   species = "Maccullochella peelii",
   iter = iter,
   warmup = warmup,
@@ -491,6 +563,7 @@ cpue_mc <- estimate_cpue(
 )                       
 cpue_bf <- estimate_cpue(
   x = cpue, 
+  use_cached = use_cached,
   species = "Gadopsis marmoratus",
   iter = iter,
   warmup = warmup,
@@ -499,6 +572,7 @@ cpue_bf <- estimate_cpue(
 )                       
 cpue_rb <- estimate_cpue(
   x = cpue, 
+  use_cached = use_cached,
   species = "Melanotaenia fluviatilis",
   iter = iter,
   warmup = warmup,
@@ -584,12 +658,12 @@ plot_hindcasts(
 
 # comparison of flows with and without e-water (using observed- and counterfactual- outputs)
 mc_adults <- plot_trajectories(
-    x = mc_sim_obs, 
-    y = mc_sim_cf,
-    subset = 5:50,
-    sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
-    probs = c(0.1, 0.9),
-    scenarios = c("Observed", "Counterfactual")
+  x = mc_sim_obs, 
+  y = mc_sim_cf,
+  subset = 5:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  probs = c(0.1, 0.9),
+  scenarios = c("Observed", "Counterfactual")
 ) 
 mc_recruits <- plot_trajectories(
   x = mc_sim_obs, 
