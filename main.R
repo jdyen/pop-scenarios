@@ -13,15 +13,6 @@
 # Date created: 5 July 2023
 # Date modified: 4 January 2024
 
-# TODO: 
-#   - update RBF and BF templates to increase average pop growth rates (flat-lining in most cases)
-#     - BF done (coldwater impacts too strong)
-#     - TODO: RBF
-#   - update BF template with recruitment flow effects (??) and with overhang info
-#      - template doens't need changing? Check
-#   - update RBF model to be age-based
-#   - check new metrics (voerhang and iwh) to make sure they're incorporated in all templates
-
 # load some packages
 library(qs)
 library(dplyr)
