@@ -194,7 +194,7 @@ add_cpue <- function(sim, cpue_mod, sim_years = 2010:2023, probs = c(0.1, 0.9)) 
 }
 
 # calculate summary metrics
-calculate_metrics <- function(x, cpue_mod, subset, sim_years, probs = c(0.1, 0.9)) {
+calculate_val_metrics <- function(x, cpue_mod, subset, sim_years, probs = c(0.1, 0.9)) {
   
   # use functions above to summarise the simulated population trajectories
   x <- mapply(
@@ -316,7 +316,7 @@ plot_hindcasts <- function(x, cpue, subset, sim_years, probs = c(0.1, 0.9)) {
   # add estimated CPUE
   x <- add_cpue(
     sim = x,
-    cpue_mod = cpue_mod,
+    cpue_mod = cpue,
     sim_years = sim_years,
     probs = probs
   )
