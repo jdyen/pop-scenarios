@@ -213,14 +213,14 @@ specify_pop_model <- function(species, waterbody, ntime, nstocked, k, ...) {
 get_coefs <- function(species, waterbody) {
   coefs <- list(
     "gadopsis_marmoratus" = list(
-      "glenelg_river_r1" = c(-5, 50, 50, 100, 75, 0.1, 0.05),
-      "glenelg_river_r2" = c(-5, 50, 50, 100, 50, 0.1, 0.05),
-      "glenelg_river_r3" = c(-5, 50, 50, 100, 50, 0.1, 0.05),
-      "loddon_river_r2" = c(-5, 50, 25, 70, 80, 0.1, 0.05),
-      "macalister_river_r1" = c(-5, 50, 15, 10, 20, 0.1, 0.05),
-      "mackenzie_river_r3" = c(-5, 50, 25, 70, 80, 0.1, 0.05),
-      "moorabool_river_r3" = c(-5, 50, 40, 40, 30, 0.1, 0.05),
-      "thomson_river_r3" = c(-5, 50, 20, 10, 15, 0.1, 0.05)
+      "glenelg_river_r1" = c(-0.1, 50, 50, 100, 75, 0.1, 0.05),
+      "glenelg_river_r2" = c(-0.1, 50, 50, 100, 50, 0.1, 0.05),
+      "glenelg_river_r3" = c(-1, 50, 50, 100, 50, 0.1, 0.05),
+      "loddon_river_r2" = c(-1, 50, 25, 70, 80, 0.1, 0.05),
+      "macalister_river_r1" = c(-0.1, 50, 15, 10, 20, 0.1, 0.05),
+      "mackenzie_river_r3" = c(-1, 50, 25, 70, 80, 0.1, 0.05),
+      "moorabool_river_r3" = c(-0.1, 50, 40, 40, 30, 0.1, 0.05),
+      "thomson_river_r3" = c(-1, 50, 20, 10, 15, 0.1, 0.05)
     ),
     "maccullochella_peelii" = list(
       "broken_creek_r4" = c(0, -100, 6, -30, 100, 100),
@@ -232,9 +232,9 @@ get_coefs <- function(species, waterbody) {
     ),
     "melanotaenia_fluviatilis" = list(
       "broken_creek_r4" = c(-0.05, 40, 20, 0.2, 0.05),
-      "broken_river_r3" = c(-0.1, 45, 30, 0.2, 0.05),
+      "broken_river_r3" = c(-0.05, 45, 30, 0.2, 0.05),
       "campaspe_river_r4" = c(-0.05, 10, 5, 0.2, 0.05),
-      "goulburn_river_r4" = c(30, -10, 20, 0.2, 0.05),
+      "goulburn_river_r4" = c(15, 5, 40, 0.2, 0.05),
       "loddon_river_r4" = c(-0.05, 10, 30, 0.2, 0.05),
       "ovens_river_r5" = c(-0.02, 40, 20, 0.2, 0.05)
     )
