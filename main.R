@@ -11,7 +11,7 @@
 # Author: Jian Yen (jdl.yen [at] gmail.com)
 # 
 # Date created: 5 July 2023
-# Date modified: 4 January 2024
+# Date modified: 12 January 2024
 
 # load some packages
 library(qs)
@@ -26,17 +26,39 @@ library(ggplot2)
 library(ragg)
 library(rstanarm)
 library(bayesplot)
+library(patchwork)
 
 # and some load helpers
 source("R/utils.R")
 source("R/fish.R")
 source("R/flow.R")
+source("R/validation.R")
 
 # settings
 set.seed(2023-10-17)
-nsim <- 200
+nsim <- 100
 nburnin <- 10
 simulate_again <- TRUE
+
+# work out reach lengths
+vewh_reaches <- fetch_table("eflow_reaches_20171214", "projects") |>
+  collect()
+st_geometry(vewh_reaches) <- st_as_sfc(vewh_reaches$geom, crs = 4283)
+vewh_reach_length <- vewh_reaches |>
+  select(eflowriver, shape_leng, vewh_reach) |>
+  mutate(segment_length = st_length(vewh_reaches)) |>
+  filter(
+    grepl(
+      "broken|glenelg|goulburn|mackenzie|campaspe|loddon|ovens|macalister|moorabool|thomson",
+      eflowriver,
+      ignore.case = TRUE
+    )
+  ) |>
+  group_by(eflowriver, vewh_reach) |>
+  summarise(surveyed_length_m = sum(segment_length)) |>
+  ungroup() |>
+  mutate(surveyed_length_km = surveyed_length_m / 1000)
+
 
 # load data
 cpue <- fetch_fish(recompile = FALSE)
@@ -50,6 +72,9 @@ cpue_exotic <- cpue_exotic |>
   summarise(presence = ifelse(sum(cpue) > 0, 1, 0))
 cpue <- cpue |> 
   filter(!grepl("perca|gambusia", scientific_name, ignore.case = TRUE))
+
+# download CPUE of recruits
+cpue_recruits <- fetch_fish(recruit = TRUE, recompile = FALSE)
 
 # load stocking info
 stocking <- read.csv("data/stocking.csv")
@@ -163,6 +188,7 @@ counterfactual <- counterfactual |>
 # re-calculate flow metrics for counterfactual scenarios
 metrics_counterfactual <- calculate_metrics(
   counterfactual,
+  reference = flow_futures,
   recompile = FALSE,
   suffix = "counterfactual"
 )
@@ -247,10 +273,14 @@ veg_overhang <- veg_overhang |>
     )
   ) |>
   mutate(
-    iwh = iwh / max(iwh),
-    proportion_overhang_hab_metrics = proportion_overhang_hab_metrics / 
-      max(proportion_overhang_hab_metrics)
+    iwh = rescale_fn(iwh, base = 0.75, na.rm = TRUE),
+    proportion_overhang_hab_metrics = rescale_fn(
+      proportion_overhang_hab_metrics,
+      base = 0.85,
+      na.rm = TRUE
+    )
   )
+
 metrics_observed <- metrics_observed |>
   left_join(
     cpue_exotic |>
@@ -425,25 +455,34 @@ if (simulate_again) {
         nstocked = n_stocked,
         k = k
       )
-      
+
       # and simulate from this model
-      sims_observed <- simulate_scenario(
+      initial <- simulate_scenario(
         species = species_list[i],
         x = pop, 
         nsim = nsim, 
         init = initial,
+        metrics = metrics_observed_wb[1, ],
+        coefs = get_coefs(species_list[i], waterbodies[j]),
+        nburnin = nburnin - 1
+      )
+      sims_observed <- simulate_scenario(
+        species = species_list[i],
+        x = pop, 
+        nsim = nsim, 
+        init = initial[, , dim(initial)[3]],
         metrics = metrics_observed_wb,
         coefs = get_coefs(species_list[i], waterbodies[j]),
-        nburnin = nburnin
+        nburnin = 0
       )
       sims_counterfactual <- simulate_scenario(
         species = species_list[i],
         x = pop, 
         nsim = nsim, 
-        init = initial,
+        init = initial[, , dim(initial)[3]],
         metrics = metrics_counterfactual_wb,
         coefs = get_coefs(species_list[i], waterbodies[j]),
-        nburnin = nburnin
+        nburnin = 0
       )
       
       # save output
@@ -456,6 +495,9 @@ if (simulate_again) {
         file = paste0("outputs/simulated/counterfactual-", species_list[i], "-", waterbodies[j], ".qs")
       )
       
+      # extract initial conditions for forecasts from sims_observed
+      initial_future <- sims_observed[, , dim(sims_observed)[3]]
+      
       # simulate futures
       future_sub <- metrics_future |>
         filter(
@@ -464,9 +506,6 @@ if (simulate_again) {
         ) |>
         distinct(future, future_next, scenario, scenario_next)
       for (ff in seq_len(nrow(future_sub))) {
-        
-        # extract initial conditions from sims_observed
-        initial_future <- sims_observed[, , dim(sims_observed)[3]]
         
         # pull out metrics for a given scenario
         metrics_future_sub <- metrics_future |>
@@ -501,7 +540,7 @@ if (simulate_again) {
           init = initial_future,
           metrics = metrics_future_sub,
           coefs = get_coefs(species_list[i], waterbodies[j]),
-          nburnin = nburnin
+          nburnin = 0
         )
         
         # and save output
@@ -538,11 +577,11 @@ rb_sim_future <- load_simulated(type = "future", species = "melanotaenia")
 
 # model CPUE using an AR1 model to estimate values (simple AR1 model with
 #   random terms to soak up variation)
-iter <- 2000
-warmup <- 1000
+iter <- 4000
+warmup <- 2000
 chains <- 4
 cores <- 4
-use_cached <- FALSE
+use_cached <- TRUE
 cpue_mc <- estimate_cpue(
   x = cpue, 
   use_cached = use_cached,
@@ -552,8 +591,28 @@ cpue_mc <- estimate_cpue(
   chains = chains,
   cores = cores
 )                       
+cpue_recruit_mc <- estimate_cpue(
+  x = cpue_recruits, 
+  recruit = TRUE,
+  use_cached = use_cached,
+  species = "Maccullochella peelii",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
 cpue_bf <- estimate_cpue(
   x = cpue, 
+  use_cached = use_cached,
+  species = "Gadopsis marmoratus",
+  iter = iter,
+  warmup = warmup,
+  chains = chains,
+  cores = cores
+)                       
+cpue_recruit_bf <- estimate_cpue(
+  x = cpue_recruits, 
+  recruit = TRUE,
   use_cached = use_cached,
   species = "Gadopsis marmoratus",
   iter = iter,
@@ -572,32 +631,18 @@ cpue_rb <- estimate_cpue(
 )                       
 
 # posterior checks (saved to figures)
-pp_mc <- pp_check(cpue_mc) + scale_x_log10()
-pp_bf <- pp_check(cpue_bf) + scale_x_log10()
-pp_rb <- pp_check(cpue_rb) + scale_x_log10()
+pp_mc <- pp_check(cpue_mc) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_bf <- pp_check(cpue_bf) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_mc_recruit <- pp_check(cpue_recruit_mc) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
+pp_bf_recruit <- pp_check(cpue_recruit_bf) + scale_x_log10() + xlab("Catch (young of year)") + ylab("Density") + theme(legend.position = "none")
+pp_rb <- pp_check(cpue_rb) + scale_x_log10() + xlab("Catch (total)") + ylab("Density") + theme(legend.position = "none")
+pp_all <- (pp_mc | pp_mc_recruit) /
+  (pp_bf | pp_bf_recruit) /
+  (pp_rb | plot_spacer()) +
+  plot_annotation(tag_levels = "a")
 ggsave(
-  filename = "outputs/figures/pp-check-mc-cpue.png",
-  plot = pp_mc,
-  device = ragg::agg_png,
-  width = 6,
-  height = 6,
-  units = "in",
-  dpi = 600,
-  bg = "white"
-)
-ggsave(
-  filename = "outputs/figures/pp-check-bf-cpue.png",
-  plot = pp_bf,
-  device = ragg::agg_png,
-  width = 6,
-  height = 6,
-  units = "in",
-  dpi = 600,
-  bg = "white"
-)
-ggsave(
-  filename = "outputs/figures/pp-check-rb-cpue.png",
-  plot = pp_rb,
+  filename = "outputs/figures/pp-checks.png",
+  plot = pp_all,
   device = ragg::agg_png,
   width = 6,
   height = 6,
@@ -607,92 +652,275 @@ ggsave(
 )
 
 # model validation (using observed minus outputs)
-mc_sim_metrics <- calculate_metrics(
+mc_sim_metrics <- calculate_val_metrics(
   x = mc_sim_obs,
   cpue_mod = cpue_mc,
   subset = 1:50, 
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
-bf_sim_metrics <- calculate_metrics(
+mc_sim_metrics_adult <- calculate_val_metrics(
+  x = mc_sim_obs,
+  cpue_mod = cpue_mc,
+  subset = 5:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+mc_sim_metrics_recruit <- calculate_val_metrics(
+  x = mc_sim_obs,
+  cpue_mod = cpue_recruit_mc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+bf_sim_metrics <- calculate_val_metrics(
   x = bf_sim_obs,
   cpue = cpue_bf,
   subset = 1:11, 
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
-rb_sim_metrics <- calculate_metrics(
+bf_sim_metrics_recruit <- calculate_val_metrics(
+  x = bf_sim_obs,
+  cpue_mod = cpue_recruit_bf,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+rb_sim_metrics <- calculate_val_metrics(
   x = rb_sim_obs,
   cpue = cpue_rb,
-  subset = 1:5, 
+  subset = 1:7, 
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
-plot_metric(mc_sim_metrics)
-plot_metric(bf_sim_metrics)
-plot_metric(rb_sim_metrics)
-plot_hindcasts(
+sim_metrics <- bind_rows(
+  mc_sim_metrics |> mutate(species = "Murray Cod"),
+  mc_sim_metrics_recruit |> mutate(species = "Murray Cod (young of year)"),
+  mc_sim_metrics_adult |> mutate(species = "Murray Cod (adults)"),
+  rb_sim_metrics |> mutate(species = "Murray-Darling Rainbowfish")
+)
+metrics_plot_mdb <- plot_metric(sim_metrics)
+metrics_plot_bf <- plot_metric(
+  bind_rows(
+    bf_sim_metrics |> mutate(species = "River Blackfish"),
+    bf_sim_metrics_recruit |> mutate(species = "River Blackfish (young of year)")
+  )
+)
+ggsave(
+  filename = "outputs/figures/metrics-mdb.png",
+  plot = metrics_plot_mdb,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/metrics-bf.png",
+  plot = metrics_plot_bf,
+  device = ragg::agg_png,
+  width = 7,
+  height = 6,
+  units = "in",
+  dpi = 600
+)
+
+# plot all hindcast combinations
+mc_hindcast <- plot_hindcasts(
   x = mc_sim_obs,
   cpue = cpue_mc,
   subset = 1:50, 
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
-plot_hindcasts(
+mc_hindcast_adult <- plot_hindcasts(
+  x = mc_sim_obs,
+  cpue = cpue_mc,
+  subset = 5:50, 
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
+)
+mc_hindcast_recruit <- plot_hindcasts(
+  x = mc_sim_obs,
+  cpue = cpue_recruit_mc,
+  recruit = TRUE,
+  subset = 1, 
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+bf_hindcast <- plot_hindcasts(
   x = bf_sim_obs,
   cpue = cpue_bf,
   subset = 1:11,
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
-plot_hindcasts(
+bf_hindcast_recruit <- plot_hindcasts(
+  x = bf_sim_obs,
+  cpue = cpue_recruit_bf,
+  recruit = TRUE,
+  subset = 1,
+  sim_years = (min(metrics_observed$water_year) - 1L):max(metrics_observed$water_year)
+)
+rb_hindcast <- plot_hindcasts(
   x = rb_sim_obs,
   cpue = cpue_rb,
-  subset = 1:5, 
+  subset = 1:7, 
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year)
 )
+ggsave(
+  filename = "outputs/figures/hindcast-mc.png",
+  plot = mc_hindcast,
+  device = ragg::agg_png,
+  width = 6.5,
+  height = 5,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcast-mc-recruits.png",
+  plot = mc_hindcast_recruit,
+  device = ragg::agg_png,
+  width = 6.5,
+  height = 5,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcast-mc-adults.png",
+  plot = mc_hindcast_adult,
+  device = ragg::agg_png,
+  width = 6.5,
+  height = 5,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcast-bf.png",
+  plot = bf_hindcast,
+  device = ragg::agg_png,
+  width = 7,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcast-bf-recruit.png",
+  plot = bf_hindcast_recruit,
+  device = ragg::agg_png,
+  width = 7,
+  height = 7,
+  units = "in",
+  dpi = 600
+)
+ggsave(
+  filename = "outputs/figures/hindcast-rb.png",
+  plot = rb_hindcast,
+  device = ragg::agg_png,
+  width = 6.5,
+  height = 5,
+  units = "in",
+  dpi = 600
+)
+
 
 # comparison of flows with and without e-water (using observed- and counterfactual- outputs)
+mc_all <- plot_trajectories(
+  x = mc_sim_obs, 
+  y = mc_sim_cf,
+  subset = 1:50,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  probs = c(0.1, 0.9)
+) 
 mc_adults <- plot_trajectories(
   x = mc_sim_obs, 
   y = mc_sim_cf,
   subset = 5:50,
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
-  probs = c(0.1, 0.9),
-  scenarios = c("Observed", "Counterfactual")
+  probs = c(0.1, 0.9)
 ) 
 mc_recruits <- plot_trajectories(
   x = mc_sim_obs, 
   y = mc_sim_cf,
-  subset = 1:2,
+  subset = 1,
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
-  probs = c(0.1, 0.9),
-  scenarios = c("Observed", "Counterfactual")
+  probs = c(0.1, 0.9)
 ) 
 bf_adults <- plot_trajectories(
   x = bf_sim_obs, 
   y = bf_sim_cf,
+  subset = 2:11,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  probs = c(0.1, 0.9)
+) 
+bf_all <- plot_trajectories(
+  x = bf_sim_obs, 
+  y = bf_sim_cf,
   subset = 1:11,
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
-  probs = c(0.1, 0.9),
-  scenarios = c("Observed", "Counterfactual")
+  probs = c(0.1, 0.9)
 ) 
-rb_adults <- plot_trajectories(
+bf_recruits <- plot_trajectories(
+  x = bf_sim_obs, 
+  y = bf_sim_cf,
+  subset = 1,
+  sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
+  probs = c(0.1, 0.9)
+) 
+rb_all <- plot_trajectories(
   x = rb_sim_obs, 
   y = rb_sim_cf,
-  subset = 1:5,
+  subset = 1:7,
   sim_years = min(metrics_observed$water_year):max(metrics_observed$water_year),
-  probs = c(0.1, 0.9),
-  scenarios = c("Observed", "Counterfactual")
+  probs = c(0.1, 0.9)
 ) 
 
 # futures (using future- outputs)
 # TODO: automate over all systems
+# TODO: consider 2024 forecast only
+# TODO: consider narrowing to a 2025 with wet 2023/2024
 mc_adult_futures_glb <- plot_forecasts(
   x = mc_sim_future, 
-  subset = 5:10,
+  subset = 5:50,
   probs = c(0.1, 0.9),
   system = "goulburn_river_r4"
 ) 
+
+# Options: 2024 forecast only
+mc_recruit_futures_glb <- plot_forecasts(
+  x = mc_sim_future, 
+  subset = 1,
+  probs = c(0.1, 0.9),
+  system = "goulburn_river_r4",
+  target = 2024
+) 
+
+# 2025 forecast but for a single 2024 forecast
+mc_recruit_futures_glb <- plot_forecasts(
+  x = mc_sim_future, 
+  subset = 1:3,
+  probs = c(0.1, 0.9),
+  system = "goulburn_river_r4",
+  climate = "Wet (2023/2024)"
+) 
+
 mc_adult_futures_cmp <- plot_forecasts(
   x = mc_sim_future, 
-  subset = 5:10,
+  subset = 5:50,
+  probs = c(0.1, 0.9),
+  system = "campaspe_river_r4"
+) 
+mc_recruit_futures_cmp <- plot_forecasts(
+  x = mc_sim_future, 
+  subset = 1:3,
   probs = c(0.1, 0.9),
   system = "campaspe_river_r4"
 ) 
 
+plot_forecasts(
+  x = mc_sim_future, 
+  subset = 1,
+  probs = c(0.1, 0.9),
+  system = "campaspe_river_r4",
+  climate = "Wet (2023/2024)"
+) 
+plot_forecasts(
+  x = mc_sim_future, 
+  subset = 5:50,
+  probs = c(0.1, 0.9),
+  system = "campaspe_river_r4",
+  target = 2024
+) 
