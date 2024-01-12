@@ -128,7 +128,7 @@ fetch_carrying_capacity <- function() {
 }
 
 # internal function to download fish data from AAEDB
-fetch_fish <- function(recompile = FALSE) {
+fetch_fish <- function(recruit = FALSE, recompile = FALSE) {
   
   # list target species and waterbodies
   .waterbody_list <- c(
@@ -154,30 +154,67 @@ fetch_fish <- function(recompile = FALSE) {
   )
   
   # check if data exist
-  fish_exists <- any(grepl("fish-compiled.qs", dir("data/")))
+  if (recruit) {
+    fish_exists <- any(grepl("fish-compiled-recruits.qs", dir("data/")))
+  } else {
+    fish_exists <- any(grepl("fish-compiled.qs", dir("data/")))
+  }
   
   # if data exist and !recompile, load saved version. Re-extract otherwise
   if (fish_exists & !recompile) {
     
     # load data
-    cpue <- qread("data/fish-compiled.qs")
+    filename <- "fish-compiled"
+    if (recruit)
+      filename <- paste0(filename, "-recruits")
+    cpue <- qread(paste0("data/", filename, ".qs"))
     
   } else {
     
     # grab cpue data from AAEDB, filtered to targets
-    cpue <- fetch_cpue(c(1, 2, 4, 6, 9, 10:13, 15:50)) |>
-      filter(
-        scientific_name %in% !!.species_list,
-        waterbody %in% !!.waterbody_list
+    if (recruit) {
+      
+      # calculate CPUE for individuals below the estimated recruit length
+      #   threshold for Murray cod and blackfish (rainbows are all "recruits")
+      cpue_mc <- fetch_cpue(
+        c(1, 2, 4, 6, 9, 10:13, 15:50),
+        criterion = list(var = "length_cm", lower = 0, upper = 13.5)
       ) |>
-      collect()
+        filter(
+          scientific_name == "Maccullochella peelii",
+          waterbody %in% !!.waterbody_list
+        ) |>
+        collect()
+      cpue_bf <- fetch_cpue(
+        c(1, 2, 4, 6, 9, 10:13, 15:50),
+        criterion = list(var = "length_cm", lower = 0, upper = 8)
+      ) |>
+        filter(
+          scientific_name == "Gadopsis marmoratus",
+          waterbody %in% !!.waterbody_list
+        ) |>
+        collect()
+      
+      # combine both and add info as per full CPUE survey info
+      cpue <- bind_rows(cpue_mc, cpue_bf)
+      
+    } else {
+      
+      cpue <- fetch_cpue(c(1, 2, 4, 6, 9, 10:13, 15:50)) |>
+        filter(
+          scientific_name %in% !!.species_list,
+          waterbody %in% !!.waterbody_list
+        ) |>
+        collect()
+      
+    }
     
     # add some site info
     site_info <- cpue |> fetch_site_info() |> collect()
     st_geometry(site_info) <- st_as_sfc(site_info$geom_pnt, crs = 4283)
     
     # ignored for now, can use VEWH reach table to add reach info    
-    vewh_reaches <- fetch_table("eflow_reaches_20171214", "spatial") |>
+    vewh_reaches <- fetch_table("eflow_reaches_20171214", "projects") |>
       collect()
     st_geometry(vewh_reaches) <- st_as_sfc(vewh_reaches$geom, crs = 4283)
     site_info <- site_info |>
@@ -241,7 +278,11 @@ fetch_fish <- function(recompile = FALSE) {
       )
     
     # save this
-    qsave(cpue, file = "data/fish-compiled.qs")
+    filename <- "fish-compiled"
+    if (recruit) {
+      filename <- paste0(filename, "-recruits")
+    }
+    qsave(cpue, file = paste0("data/", filename, ".qs"))
     
   }
   
