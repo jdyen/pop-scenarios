@@ -5,6 +5,26 @@ add_col_bind <- function(x, name = "scenario") {
   bind_rows(out) |> rename(!!name := category)
 }
 
+# function to rescale values between [base, top]
+rescale_fn <- function(x, base, top = 1, ...) {
+  
+  # shift to min = 0
+  x <- x - min(x, ...)
+  
+  # scale to [0, 1]
+  x <- x / max(x, ...)
+  
+  # shrink to [0, top - base]
+  x <- (top - base) * x
+  
+  # and add base
+  x <- base + x
+  
+  # return
+  x
+  
+}
+
 # function to set initial conditions based on assumed constant proportional
 #   survival over all age classes, but modified based on survey data
 #   to account for shifts to older/younger age classes
