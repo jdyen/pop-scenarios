@@ -194,7 +194,7 @@ fetch_hypoxia_risk <- function() {
 }
 
 # function calculate flow metrics from daily discharge and temperature data
-calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
+calculate_metrics <- function(data, reference = NULL, recompile = FALSE, suffix = "observed") {
   
   # check if metrics exist
   metrics_exist <- any(grepl(paste0("metrics_", suffix, ".qs"), dir("data/")))
@@ -211,9 +211,23 @@ calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
     year <- min(year(data$date_formatted)):max(year(data$date_formatted))
     
     # and grab some reference values for rescaling
-    reference_discharge <- median(data$stream_discharge_mld, na.rm = TRUE)
-    reference_temperature <- median(data$water_temperature_c, na.rm = TRUE)
-    reference_max <- max(data$stream_discharge_mld, na.rm = TRUE)
+    if (is.null(reference)) {
+      reference <- data |>
+        group_by(waterbody) |>
+        summarise(
+          reference_discharge = median(stream_discharge_mld, na.rm = TRUE),
+          reference_temperature = median(water_temperature_c, na.rm = TRUE),
+          reference_max = max(stream_discharge_mld, na.rm = TRUE)
+        )
+    } else {
+      reference <- reference |>
+        group_by(waterbody) |>
+        summarise(
+          reference_discharge = median(stream_discharge_mld, na.rm = TRUE),
+          reference_temperature = median(water_temperature_c, na.rm = TRUE),
+          reference_max = max(stream_discharge_mld, na.rm = TRUE)
+        )
+    }
     
     # pull out carrying capacity and hypoxia levels by group
     carrying_capacity <- data %>% 
@@ -347,7 +361,7 @@ calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
         nday_lt18 = calculate(
           temp,
           date,
-          resolution = survey(season = 7:18, subset = year),
+          resolution = survey(season = 11:14, subset = year),
           fun = days_below,
           threshold = 18
         )$metric,
@@ -355,28 +369,24 @@ calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
           flow,
           date,
           na.rm = TRUE,
-          standardise = by_median(subset = year, na.rm = TRUE),
           resolution = survey(season = 7:18, subset = year)
         )$metric,
         annual_median_flow_tm1 = calculate(
           flow,
           date,
           na.rm = TRUE,
-          standardise = by_median(subset = year, na.rm = TRUE),
           resolution = survey(season = 7:18, subset = year, lag = 1)
         )$metric,
         annual_median_flow_tm2 = calculate(
           flow,
           date,
           na.rm = TRUE,
-          standardise = by_median(subset = year, na.rm = TRUE),
           resolution = survey(season = 7:18, subset = year, lag = 2)
         )$metric,
         annual_median_flow_tm3 = calculate(
           flow,
           date,
           na.rm = TRUE,
-          standardise = by_median(subset = year, na.rm = TRUE),
           resolution = survey(season = 7:18, subset = year, lag = 3)
         )$metric,
         hypoxia_risk_discharge = calculate(
@@ -398,11 +408,12 @@ calculate_metrics <- function(data, recompile = FALSE, suffix = "observed") {
         )$metric
       ) |>
       left_join(carrying_capacity, by = c("species", "waterbody")) |>
+      left_join(reference, by = "waterbody") |>
       mutate(
         lagged_median_flow = median(
           c(annual_median_flow_tm1, annual_median_flow_tm2, annual_median_flow_tm3),
           na.rm = TRUE
-        ),
+        ) / reference_discharge,
         kdyn = lagged_median_flow * carrying_capacity,
         kdyn = ifelse(kdyn > 3 * carrying_capacity, 3 * carrying_capacity, kdyn),
         hypoxia_risk = ifelse(hypoxia_risk_discharge & hypoxia_risk_temp, 1, 0)
