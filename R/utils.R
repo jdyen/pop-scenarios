@@ -243,7 +243,7 @@ get_coefs <- function(species, waterbody) {
       "thomson_river_r3" = c(-1, 50, 20, 10, 15, 0.1, 0.05)
     ),
     "maccullochella_peelii" = list(
-      "broken_creek_r4" = c(0, -100, 6, -30, 100, 100),
+      "broken_creek_r4" = c(-10, 30, 6, -30, 100, 100),
       "broken_river_r3" = c(-15, 35, 45, -30, 80, 25),
       "campaspe_river_r4" = c(-60, 10, 20, -15, 45, 10),
       "goulburn_river_r4" = c(-5, 20, 6, -10, 30, 10),
