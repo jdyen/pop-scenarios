@@ -11,7 +11,7 @@
 # Author: Jian Yen (jdl.yen [at] gmail.com)
 # 
 # Date created: 5 July 2023
-# Date modified: 12 January 2024
+# Date modified: 16 January 2024
 
 # load some packages
 library(qs)
@@ -36,7 +36,7 @@ source("R/validation.R")
 
 # settings
 set.seed(2023-10-17)
-nsim <- 100
+nsim <- 200
 nburnin <- 10
 simulate_again <- TRUE
 
@@ -58,7 +58,6 @@ vewh_reach_length <- vewh_reaches |>
   summarise(surveyed_length_m = sum(segment_length)) |>
   ungroup() |>
   mutate(surveyed_length_km = surveyed_length_m / 1000)
-
 
 # load data
 cpue <- fetch_fish(recompile = FALSE)
@@ -207,6 +206,12 @@ metrics_observed <- metrics |>
     across(
       contains("_counterfactual"),
       .fns = \(x) ifelse(is.na(x), get(gsub("_counterfactual", "", cur_column())), x)
+    ),
+    hypoxia_risk_temp_counterfactual = hypoxia_risk_temp,
+    hypoxia_risk_counterfactual = ifelse(
+      hypoxia_risk_discharge_counterfactual & hypoxia_risk_temp_counterfactual,
+      1,
+      0
     )
   )
 metrics_counterfactual <- metrics_observed |>
@@ -868,10 +873,41 @@ rb_all <- plot_trajectories(
   probs = c(0.1, 0.9)
 ) 
 
+metrics_counterfactual |>
+  filter(
+    waterbody == "broken_creek_r4",
+    species == "maccullochella_peelii"
+  ) |>
+  mutate(type = "counterfactual") |>
+  bind_rows(
+    metrics_observed |>
+      filter(
+        waterbody == "broken_creek_r4",
+        species == "maccullochella_peelii"
+      ) |>
+      mutate(type = "actual")
+  ) |>
+  select(
+    water_year,
+    type,
+    proportional_spring_flow,
+    proportional_summer_flow,
+    proportional_winter_flow,
+    proportional_max_antecedent,
+    spawning_flow_variability,
+    spawning_temperature,
+    minimum_daily_flow,
+    lagged_median_flow,
+    hypoxia_risk
+  ) |>
+  pivot_longer(
+    cols = c(contains("flow"), contains("max"), contains("hyp"), contains("temp"))
+  ) |>
+  ggplot(aes(x = water_year, y = value, col = type)) +
+  geom_point() +
+  facet_wrap( ~ name, scales = "free_y")
+
 # futures (using future- outputs)
-# TODO: automate over all systems
-# TODO: consider 2024 forecast only
-# TODO: consider narrowing to a 2025 with wet 2023/2024
 mc_adult_futures_glb <- plot_forecasts(
   x = mc_sim_future, 
   subset = 5:50,
@@ -924,3 +960,4 @@ plot_forecasts(
   system = "campaspe_river_r4",
   target = 2024
 ) 
+
